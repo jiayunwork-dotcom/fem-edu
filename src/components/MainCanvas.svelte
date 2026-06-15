@@ -1,0 +1,545 @@
+<script>
+import { onMount, onDestroy, afterUpdate } from 'svelte';
+import { CanvasTransform, drawGrid, drawAxes, drawArrow, findNearestPoint, findNearestNode, findNearestElement, stressToColor, pointInTriangle } from '$lib/canvasUtils.js';
+import { polygons as polysStore, currentPolygonPoints as curPtsStore, drawingMode as drawModeStore, holeMode as holeStore, selectedVertex as selVertStore, nodes as nodesStore, elements as elemsStore, meshAnimStep as meshStepStore, meshAnimSteps as meshStepsStore, material as matStore, planeStress as psStore, thickness as thickStore, bodyForce as bfStore, edgeLoads as eloadsStore, selectedNodes as selNodesStore, femResults as femResStore, postProcessMode as postModeStore, deformationScale as defScaleStore, stressType as sTypeStore, pushUndo, resetGeometry, clearMesh, meshSpacing as spacingStore } from '$lib/stores.js';
+import { Polygon } from '$lib/types.js';
+import { generateSeedsOnBoundary, generateInteriorSeeds, bowyerWatson, solveFEM } from '$lib/fem.js';
+
+export let width = 800;
+export let height = 600;
+export let onMeshGenerated;
+export let onFEMComplete;
+
+let canvas, ctx;
+let transform;
+let isDragging = false;
+let isPanning = false;
+let dragStart = { x: 0, y: 0 };
+let hoverPos = { x: 0, y: 0 };
+let rafId = null;
+
+let curUnsubs = [];
+let st_polys, st_curPts, st_drawMode, st_hole, st_selVert, st_nodes, st_elems;
+let st_meshStep, st_meshSteps, st_mat, st_ps, st_thickness, st_bf, st_eloads, st_selNodes;
+let st_femRes, st_postMode, st_defScale, st_sType, st_spacing;
+
+onMount(() => {
+  transform = new CanvasTransform(width, height);
+  ctx = canvas.getContext('2d');
+  transform.scale = 2;
+  transform.offsetX = width / 2;
+  transform.offsetY = height / 2;
+  curUnsubs = [
+    polysStore.subscribe(v => st_polys = v),
+    curPtsStore.subscribe(v => st_curPts = v),
+    drawModeStore.subscribe(v => st_drawMode = v),
+    holeStore.subscribe(v => st_hole = v),
+    selVertStore.subscribe(v => st_selVert = v),
+    nodesStore.subscribe(v => st_nodes = v),
+    elemsStore.subscribe(v => st_elems = v),
+    meshStepStore.subscribe(v => st_meshStep = v),
+    meshStepsStore.subscribe(v => st_meshSteps = v),
+    matStore.subscribe(v => st_mat = v),
+    psStore.subscribe(v => st_ps = v),
+    thickStore.subscribe(v => st_thickness = v),
+    bfStore.subscribe(v => st_bf = v),
+    eloadsStore.subscribe(v => st_eloads = v),
+    selNodesStore.subscribe(v => st_selNodes = v),
+    femResStore.subscribe(v => st_femRes = v),
+    postModeStore.subscribe(v => st_postMode = v),
+    defScaleStore.subscribe(v => st_defScale = v),
+    sTypeStore.subscribe(v => st_sType = v),
+    spacingStore.subscribe(v => st_spacing = v)
+  ];
+  render();
+});
+
+onDestroy(() => {
+  curUnsubs.forEach(u => u());
+  if (rafId) cancelAnimationFrame(rafId);
+});
+
+afterUpdate(() => { render(); });
+
+function render() {
+  if (!ctx || !transform) return;
+  ctx.clearRect(0, 0, width, height);
+  drawGrid(ctx, transform);
+  drawAxes(ctx, transform);
+  drawPolygons();
+  drawCurrentDrawing();
+  drawMeshAnim();
+  drawFinalMesh();
+  drawConstraints();
+  drawPostProcess();
+  drawHoverInfo();
+}
+
+function drawPolygons() {
+  for (const poly of st_polys || []) {
+    if (poly.points.length < 2) continue;
+    const isHole = poly.isHole;
+    const sp = poly.points.map(p => transform.worldToScreen(p.x, p.y));
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(sp[0].x, sp[0].y);
+    for (let i = 1; i < sp.length; i++) ctx.lineTo(sp[i].x, sp[i].y);
+    if (isHole) {
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.fill();
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = '#e67e22';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else {
+      ctx.fillStyle = 'rgba(52,152,219,0.08)';
+      ctx.fill();
+      ctx.strokeStyle = '#2980b9';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    ctx.restore();
+    for (let i = 0; i < poly.points.length - 1; i++) {
+      ctx.beginPath();
+      ctx.arc(sp[i].x, sp[i].y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = isHole ? '#e67e22' : '#2980b9';
+      ctx.fill();
+    }
+  }
+}
+
+function drawCurrentDrawing() {
+  const pts = st_curPts || [];
+  if (!pts.length) return;
+  const sp = pts.map(p => transform.worldToScreen(p.x, p.y));
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(sp[0].x, sp[0].y);
+  for (let i = 1; i < sp.length; i++) ctx.lineTo(sp[i].x, sp[i].y);
+  if (st_drawMode === 'draw' && hoverPos) {
+    ctx.lineTo(hoverPos.x, hoverPos.y);
+    ctx.lineTo(sp[0].x, sp[0].y);
+  }
+  ctx.strokeStyle = st_hole ? '#e67e22' : '#3498db';
+  ctx.setLineDash([4, 3]);
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+  for (let i = 0; i < sp.length; i++) {
+    ctx.beginPath();
+    ctx.arc(sp[i].x, sp[i].y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = i === 0 ? '#e74c3c' : '#3498db';
+    ctx.fill();
+  }
+}
+
+function drawMeshAnim() {
+  if (st_meshStep < 0 || !st_meshSteps || !st_meshSteps.length) return;
+  const step = st_meshSteps[st_meshStep];
+  if (!step || step.type !== 'insert') return;
+  if (step.badTriangles) {
+    for (const t of step.badTriangles) drawTriNodes(t.nodes, 'rgba(231,76,60,0.45)', '#e74c3c', 2);
+  }
+  if (step.point) {
+    const sp = transform.worldToScreen(step.point.x, step.point.y);
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 8, 0, Math.PI * 2);
+    ctx.fillStyle = '#f1c40f';
+    ctx.fill();
+    ctx.strokeStyle = '#e67e22';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+  }
+  if (step.newTriangles) {
+    for (const t of step.newTriangles) drawTriNodes(t.nodes, 'rgba(46,204,113,0.4)', '#27ae60', 2.5);
+  }
+}
+
+function drawFinalMesh() {
+  if (!st_elems || !st_elems.length || (st_meshStep >= 0 && st_meshSteps && st_meshSteps.length)) return;
+  let minV = Infinity, maxV = -Infinity;
+  const color = st_femRes && (st_postMode === 'stress');
+  if (color) {
+    for (const el of st_elems) {
+      const s = el.stress || { sx:0, sy:0, sxy:0, vm:0 };
+      const v = st_sType === 'sx' ? s.sx : st_sType === 'sy' ? s.sy : st_sType === 'sxy' ? s.sxy : s.vm;
+      minV = Math.min(minV, v); maxV = Math.max(maxV, v);
+    }
+  }
+  for (const el of st_elems) {
+    const ns = el.nodes.map(n => {
+      const scale = st_defScale || 0;
+      if (st_femRes && st_postMode !== 'stress') {
+        return transform.worldToScreen(n.x + (n.ux || 0) * scale, n.y + (n.uy || 0) * scale);
+      }
+      return transform.worldToScreen(n.x, n.y);
+    });
+    ctx.save();
+    if (color) {
+      const s = el.stress || {};
+      const v = st_sType === 'sx' ? (s.sx || 0) : st_sType === 'sy' ? (s.sy || 0) : st_sType === 'sxy' ? (s.sxy || 0) : (s.vm || 0);
+      ctx.fillStyle = stressToColor(v, minV, maxV);
+      ctx.beginPath();
+      ctx.moveTo(ns[0].x, ns[0].y);
+      ctx.lineTo(ns[1].x, ns[1].y);
+      ctx.lineTo(ns[2].x, ns[2].y);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.moveTo(ns[0].x, ns[0].y);
+    ctx.lineTo(ns[1].x, ns[1].y);
+    ctx.lineTo(ns[2].x, ns[2].y);
+    ctx.closePath();
+    ctx.strokeStyle = '#7f8c8d';
+    ctx.lineWidth = 0.7;
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (st_femRes && st_postMode === 'deformation' && (st_defScale || 0) > 0) {
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = 'rgba(149,165,166,0.7)';
+    ctx.lineWidth = 1;
+    for (const el of st_elems) {
+      const ns = el.nodes.map(n => transform.worldToScreen(n.x, n.y));
+      ctx.beginPath();
+      ctx.moveTo(ns[0].x, ns[0].y);
+      ctx.lineTo(ns[1].x, ns[1].y);
+      ctx.lineTo(ns[2].x, ns[2].y);
+      ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  for (const n of st_nodes || []) {
+    const sp = transform.worldToScreen(n.x, n.y);
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = st_selNodes && st_selNodes.has(n.id) ? '#e74c3c' : '#2c3e50';
+    ctx.fill();
+  }
+}
+
+function drawTriNodes(ns, fill, stroke, lw) {
+  const sp = ns.map(n => transform.worldToScreen(n.x, n.y));
+  ctx.save();
+  if (fill) {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.moveTo(sp[0].x, sp[0].y);
+    ctx.lineTo(sp[1].x, sp[1].y);
+    ctx.lineTo(sp[2].x, sp[2].y);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = lw;
+  ctx.beginPath();
+  ctx.moveTo(sp[0].x, sp[0].y);
+  ctx.lineTo(sp[1].x, sp[1].y);
+  ctx.lineTo(sp[2].x, sp[2].y);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawConstraints() {
+  for (const n of st_nodes || []) {
+    const sp = transform.worldToScreen(n.x, n.y);
+    const c = n.constraints || {};
+    if (c.ux || c.uy || c.kx != null || c.ky != null) {
+      ctx.save();
+      ctx.fillStyle = '#27ae60';
+      ctx.strokeStyle = '#1e8449';
+      ctx.lineWidth = 1.5;
+      if (c.ux && c.uy) {
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y - 9);
+        ctx.lineTo(sp.x + 8, sp.y + 6);
+        ctx.lineTo(sp.x - 8, sp.y + 6);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      } else if (c.ux) {
+        ctx.fillRect(sp.x - 9, sp.y - 2, 18, 4);
+      } else if (c.uy) {
+        ctx.fillRect(sp.x - 2, sp.y - 9, 4, 18);
+      }
+      if (c.kx != null || c.ky != null) {
+        ctx.strokeStyle = '#8e44ad';
+        ctx.beginPath();
+        ctx.moveTo(sp.x - 10, sp.y - 12);
+        for (let i = 0; i < 5; i++) {
+          ctx.lineTo(sp.x + (i % 2 ? 10 : -10), sp.y - 12 + (i + 1) * 3);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if ((n.fx || n.fy) && (Math.abs(n.fx) > 1e-9 || Math.abs(n.fy) > 1e-9)) {
+      const mag = Math.hypot(n.fx, n.fy);
+      const len = Math.min(60, Math.max(18, 10 + Math.log10(mag + 1) * 14));
+      const nx = n.fx / mag, ny = n.fy / mag;
+      const ws = transform.worldToScreen(n.x, n.y);
+      const we = transform.worldToScreen(n.x + nx * len / transform.scale, n.y + ny * len / transform.scale);
+      drawArrow(ctx, ws.x, ws.y, we.x, we.y, '#e74c3c', 9);
+    }
+  }
+}
+
+function drawPostProcess() {
+  if (!st_femRes || st_postMode !== 'contour') return;
+  const vals = (st_nodes || []).map(n => Math.hypot(n.ux || 0, n.uy || 0));
+  const levels = 10;
+  const minV = Math.min(...vals, 1e-99), maxV = Math.max(...vals, -1e-99);
+  if (maxV - minV < 1e-20) return;
+  const sc = st_defScale || 0;
+  for (let l = 1; l < levels; l++) {
+    const target = minV + (maxV - minV) * (l / levels);
+    ctx.save();
+    ctx.strokeStyle = `hsl(${(l / levels) * 240},70%,45%)`;
+    ctx.lineWidth = 1.5;
+    for (const el of st_elems || []) {
+      const segs = [];
+      const ids = el.nodes.map(n => n.id);
+      const vs = ids.map(i => vals[i] || 0);
+      for (let i = 0; i < 3; i++) {
+        const j = (i + 1) % 3;
+        if ((vs[i] - target) * (vs[j] - target) < 0) {
+          const t = (target - vs[i]) / (vs[j] - vs[i]);
+          const ni = el.nodes[i], nj = el.nodes[j];
+          const ux = (ni.ux || 0) + ((nj.ux || 0) - (ni.ux || 0)) * t;
+          const uy = (ni.uy || 0) + ((nj.uy || 0) - (ni.uy || 0)) * t;
+          const wx = ni.x + (nj.x - ni.x) * t + ux * sc;
+          const wy = ni.y + (nj.y - ni.y) * t + uy * sc;
+          segs.push(transform.worldToScreen(wx, wy));
+        }
+      }
+      if (segs.length === 2) {
+        ctx.beginPath();
+        ctx.moveTo(segs[0].x, segs[0].y);
+        ctx.lineTo(segs[1].x, segs[1].y);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+}
+
+function drawHoverInfo() {
+  if (!st_nodes || !st_nodes.length || !hoverPos) return;
+  const wp = transform.screenToWorld(hoverPos.x, hoverPos.y);
+  const nearN = findNearestNode(st_nodes, wp.x, wp.y, 15 / transform.scale);
+  if (nearN) {
+    const sp = transform.worldToScreen(nearN.x, nearN.y);
+    ctx.save();
+    ctx.strokeStyle = '#f39c12';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    const label = `节点${nearN.id} (${nearN.x.toFixed(1)},${nearN.y.toFixed(1)})` +
+      (st_femRes ? ` u=(${nearN.ux.toExponential(2)},${nearN.uy.toExponential(2)})` : '');
+    ctx.font = '12px monospace';
+    const w = ctx.measureText(label).width;
+    ctx.fillRect(sp.x + 14, sp.y - 20, w + 10, 22);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, sp.x + 19, sp.y - 5);
+    ctx.restore();
+  }
+}
+
+function handleMouseDown(e) {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const wp = transform.screenToWorld(sx, sy);
+  if (e.button === 1 || e.shiftKey) {
+    isPanning = true;
+    dragStart = { x: sx, y: sy };
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+  if (st_drawMode === 'draw') {
+    if (e.button === 0) {
+      const pts = [...(st_curPts || [])];
+      if (pts.length > 2 && Math.hypot(wp.x - pts[0].x, wp.y - pts[0].y) < 15 / transform.scale) {
+        finishPolygon();
+      } else {
+        pts.push({ x: wp.x, y: wp.y });
+        curPtsStore.set(pts);
+      }
+    }
+  } else if (st_drawMode === 'select') {
+    const nearN = findNearestNode(st_nodes || [], wp.x, wp.y, 15 / transform.scale);
+    if (nearN) {
+      const s = new Set(st_selNodes || []);
+      if (e.ctrlKey || e.metaKey) {
+        if (s.has(nearN.id)) s.delete(nearN.id); else s.add(nearN.id);
+      } else s.clear(), s.add(nearN.id);
+      selNodesStore.set(s);
+      return;
+    }
+    const nearEl = findNearestElement(st_elems || [], wp.x, wp.y);
+    if (nearEl) { import('$lib/stores.js').then(m => m.selectedElement.set(nearEl)); selNodesStore.set(new Set()); return; }
+    for (let pi = 0; pi < (st_polys || []).length; pi++) {
+      const poly = st_polys[pi];
+      const ni = findNearestPoint(poly.points, wp.x, wp.y, 15 / transform.scale);
+      if (ni !== null) {
+        selVertStore.set({ polyIdx: pi, vertexIdx: ni });
+        isDragging = true;
+        canvas.style.cursor = 'pointer';
+        return;
+      }
+    }
+    selNodesStore.set(new Set());
+  } else if (st_drawMode === 'constraint') {
+    const nearN = findNearestNode(st_nodes || [], wp.x, wp.y, 18 / transform.scale);
+    if (nearN) {
+      nearN.constraints.ux = !nearN.constraints.ux;
+      nearN.constraints.uy = nearN.constraints.ux;
+      nodesStore.set([...st_nodes]);
+    }
+  } else if (st_drawMode === 'load') {
+    const nearN = findNearestNode(st_nodes || [], wp.x, wp.y, 18 / transform.scale);
+    if (nearN) {
+      const f = parseFloat(prompt('输入集中力 Fy (N，正向上):', '-1000')) || 0;
+      nearN.fy = (nearN.fy || 0) + f;
+      nodesStore.set([...st_nodes]);
+    }
+  }
+}
+
+function handleMouseMove(e) {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  hoverPos = { x: sx, y: sy };
+  const wp = transform.screenToWorld(sx, sy);
+  if (isPanning) {
+    transform.pan(sx - dragStart.x, sy - dragStart.y);
+    dragStart = { x: sx, y: sy };
+    requestRender();
+    return;
+  }
+  if (isDragging && st_selVert) {
+    const sv = st_selVert;
+    const newPolys = JSON.parse(JSON.stringify(st_polys || []));
+    newPolys[sv.polyIdx].points[sv.vertexIdx] = { x: wp.x, y: wp.y };
+    if (sv.vertexIdx === 0 && newPolys[sv.polyIdx].points.length > 1) {
+      newPolys[sv.polyIdx].points[newPolys[sv.polyIdx].points.length - 1] = { x: wp.x, y: wp.y };
+    }
+    polysStore.set(newPolys.map(sp => {
+      const p = new Polygon(sp.points, sp.isHole);
+      p.id = sp.id || Math.random().toString(36).slice(2, 9);
+      return p;
+    }));
+    clearMesh();
+    requestRender();
+    return;
+  }
+  requestRender();
+}
+
+function handleMouseUp() {
+  if (isDragging && st_selVert) pushUndo();
+  isDragging = false;
+  isPanning = false;
+  selVertStore.set(null);
+  canvas.style.cursor = 'default';
+  requestRender();
+}
+
+function handleWheel(e) {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  transform.zoom(factor, sx, sy);
+  requestRender();
+}
+
+function handleDblClick() {
+  if (st_drawMode === 'draw' && (st_curPts || []).length >= 3) finishPolygon();
+}
+
+function finishPolygon() {
+  const pts = [...(st_curPts || [])];
+  if (pts.length >= 3) {
+    const poly = new Polygon([...pts, { ...pts[0] }], st_hole);
+    pushUndo();
+    polysStore.set([...(st_polys || []), poly]);
+  }
+  curPtsStore.set([]);
+}
+
+function requestRender() {
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = requestAnimationFrame(render);
+}
+
+export function generateMesh() {
+  if (!st_polys || !st_polys.length) return;
+  const spacing = st_spacing || 30;
+  const outer = (st_polys || []).filter(p => !p.isHole);
+  const holes = (st_polys || []).filter(p => p.isHole);
+  if (!outer.length) return;
+  const seeds = [];
+  for (const p of outer) seeds.push(...generateSeedsOnBoundary([p], spacing));
+  for (const p of holes) seeds.push(...generateSeedsOnBoundary([p], spacing * 0.8));
+  for (const op of outer) seeds.push(...generateInteriorSeeds(op, holes, spacing));
+  const { triangles, nodes: ns, steps } = bowyerWatson(seeds, outer, holes, true);
+  triangles.forEach((t, i) => { t.id = i; t.t = st_thickness || 0.01; });
+  nodesStore.set(ns);
+  elemsStore.set(triangles);
+  import('$lib/fem.js').then(m => {
+    const ms = m.getMeshStats(triangles);
+    import('$lib/stores.js').then(m2 => m2.meshStats.set(ms));
+  });
+  meshStepsStore.set(steps);
+  meshStepStore.set(-1);
+  if (onMeshGenerated) onMeshGenerated({ triangles, nodes: ns, steps });
+  requestRender();
+}
+
+export function runFEM() {
+  if (!st_elems || !st_elems.length) return;
+  for (const el of st_elems) el.t = st_thickness || 0.01;
+  const result = solveFEM(st_nodes, st_elems, st_mat, {
+    planeStress: st_ps !== false,
+    bodyForce: st_bf,
+    edgeLoads: st_eloads || []
+  });
+  femResStore.set(result);
+  if (onFEMComplete) onFEMComplete(result);
+  requestRender();
+}
+
+export function fitView() {
+  if (!st_polys || !st_polys.length) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of st_polys) {
+    const bb = p.boundingBox;
+    minX = Math.min(minX, bb.minX); maxX = Math.max(maxX, bb.maxX);
+    minY = Math.min(minY, bb.minY); maxY = Math.max(maxY, bb.maxY);
+  }
+  transform.fitToBounds({ minX, maxX, minY, maxY }, 60);
+  requestRender();
+}
+</script>
+
+<canvas
+  bind:this={canvas}
+  {width}
+  {height}
+  on:mousedown={handleMouseDown}
+  on:mousemove={handleMouseMove}
+  on:mouseup={handleMouseUp}
+  on:mouseleave={handleMouseUp}
+  on:dblclick={handleDblClick}
+  on:wheel={handleWheel}
+  style="display: block; background: #fafbfc; border-radius: 6px; border: 1px solid #e1e8ed;"
+/>
