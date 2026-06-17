@@ -1,10 +1,11 @@
-<script>
+<script lang="ts">
 import { onDestroy } from 'svelte';
 import { levels, getLevelById, getNextLevel } from '$lib/levels.js';
+import type { Level, LevelQuestion } from '$lib/types.js';
 import { viewMode, currentLevelId, unlockedLevels, levelAnswers, resetGeometry, polygons, meshSpacing, material, thickness } from '$lib/stores.js';
 import { createRectTemplate, createLShape, createIShape, createHoleCircle } from '$lib/canvasUtils.js';
 
-export let onClose;
+export let onClose: () => void;
 
 let selectedLevelId = 1;
 let userAnswers = {};

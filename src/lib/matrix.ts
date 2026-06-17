@@ -1,18 +1,26 @@
-// 矩阵运算工具函数
+export type Matrix = number[][];
+export type Vector = number[];
 
-export function zeros(rows, cols) {
-  const m = new Array(rows);
+export interface GaussStep {
+  M: Matrix;
+  pivot: number;
+  eliminated: number;
+  desc: string;
+}
+
+export function zeros(rows: number, cols: number): Matrix {
+  const m: Matrix = new Array(rows);
   for (let i = 0; i < rows; i++) {
     m[i] = new Array(cols).fill(0);
   }
   return m;
 }
 
-export function zerosVec(n) {
+export function zerosVec(n: number): Vector {
   return new Array(n).fill(0);
 }
 
-export function matMul(A, B) {
+export function matMul(A: Matrix, B: Matrix): Matrix {
   const rowsA = A.length, colsA = A[0].length;
   const rowsB = B.length, colsB = B[0].length;
   if (colsA !== rowsB) throw new Error('矩阵维度不匹配');
@@ -29,7 +37,7 @@ export function matMul(A, B) {
   return C;
 }
 
-export function matTranspose(A) {
+export function matTranspose(A: Matrix): Matrix {
   const rows = A.length, cols = A[0].length;
   const T = zeros(cols, rows);
   for (let i = 0; i < rows; i++) {
@@ -40,36 +48,36 @@ export function matTranspose(A) {
   return T;
 }
 
-export function matScalar(A, s) {
+export function matScalar(A: Matrix, s: number): Matrix {
   return A.map(row => row.map(v => v * s));
 }
 
-export function matAdd(A, B) {
+export function matAdd(A: Matrix, B: Matrix): Matrix {
   if (A.length !== B.length || A[0].length !== B[0].length) {
     throw new Error('矩阵维度不匹配');
   }
   return A.map((row, i) => row.map((v, j) => v + B[i][j]));
 }
 
-export function vecAdd(a, b) {
+export function vecAdd(a: Vector, b: Vector): Vector {
   return a.map((v, i) => v + b[i]);
 }
 
-export function vecScalar(a, s) {
+export function vecScalar(a: Vector, s: number): Vector {
   return a.map(v => v * s);
 }
 
-export function vecDot(a, b) {
+export function vecDot(a: Vector, b: Vector): number {
   let s = 0;
   for (let i = 0; i < a.length; i++) s += a[i] * b[i];
   return s;
 }
 
-export function solveLinearSystem(K, F, constraints = []) {
+export function solveLinearSystem(K: Matrix, F: Vector, constraints: boolean[] = []): Vector {
   const n = K.length;
-  const Kc = K.map(r => [...r]);
-  const Fc = [...F];
-  const freeDofs = [];
+  const Kc: Matrix = K.map(r => [...r]);
+  const Fc: Vector = [...F];
+  const freeDofs: number[] = [];
   for (let i = 0; i < n; i++) {
     if (!constraints[i]) freeDofs.push(i);
   }
@@ -90,9 +98,9 @@ export function solveLinearSystem(K, F, constraints = []) {
   return U;
 }
 
-export function gaussElimination(A, b) {
+export function gaussElimination(A: Matrix, b: Vector): Vector {
   const n = A.length;
-  const M = A.map((row, i) => [...row, b[i]]);
+  const M: Matrix = A.map((row, i) => [...row, b[i]]);
   for (let p = 0; p < n; p++) {
     let maxRow = p;
     for (let i = p + 1; i < n; i++) {
@@ -111,10 +119,10 @@ export function gaussElimination(A, b) {
   return M.map(r => r[n]);
 }
 
-export function gaussEliminationSteps(A, b) {
+export function gaussEliminationSteps(A: Matrix, b: Vector): { steps: GaussStep[]; result: Vector } {
   const n = A.length;
-  const M = A.map((row, i) => [...row, b[i]]);
-  const steps = [];
+  const M: Matrix = A.map((row, i) => [...row, b[i]]);
+  const steps: GaussStep[] = [];
   steps.push({ M: M.map(r => [...r]), pivot: -1, eliminated: -1, desc: '初始增广矩阵 [K|F]' });
   for (let p = 0; p < n; p++) {
     let maxRow = p;
@@ -142,11 +150,11 @@ export function gaussEliminationSteps(A, b) {
   return { steps, result };
 }
 
-export function determinant2x2(m) {
+export function determinant2x2(m: Matrix): number {
   return m[0][0] * m[1][1] - m[0][1] * m[1][0];
 }
 
-export function formatNumber(v, digits = 4) {
+export function formatNumber(v: number, digits: number = 4): string {
   if (Math.abs(v) < 1e-12) return '0';
   if (Math.abs(v) >= 1e6 || (Math.abs(v) < 1e-3 && v !== 0)) {
     return v.toExponential(digits);

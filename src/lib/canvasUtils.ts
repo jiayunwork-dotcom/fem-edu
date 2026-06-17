@@ -1,35 +1,56 @@
 import { Polygon } from './types.js';
+import type { Point2D, PolygonState } from './types.js';
 
 export class UndoRedoManager {
+  undoStack: string[];
+  redoStack: string[];
+
   constructor() {
     this.undoStack = [];
     this.redoStack = [];
   }
 
-  push(state) {
+  push(state: { polygons: PolygonState[] }): void {
     this.undoStack.push(JSON.stringify(state));
     this.redoStack = [];
     if (this.undoStack.length > 100) this.undoStack.shift();
   }
 
-  undo(currentState) {
+  undo(currentState: { polygons: PolygonState[] }): { polygons: PolygonState[] } | null {
     if (this.undoStack.length === 0) return null;
     this.redoStack.push(JSON.stringify(currentState));
-    return JSON.parse(this.undoStack.pop());
+    return JSON.parse(this.undoStack.pop() as string);
   }
 
-  redo(currentState) {
+  redo(currentState: { polygons: PolygonState[] }): { polygons: PolygonState[] } | null {
     if (this.redoStack.length === 0) return null;
     this.undoStack.push(JSON.stringify(currentState));
-    return JSON.parse(this.redoStack.pop());
+    return JSON.parse(this.redoStack.pop() as string);
   }
 
-  get canUndo() { return this.undoStack.length > 0; }
-  get canRedo() { return this.redoStack.length > 0; }
+  get canUndo(): boolean {
+    return this.undoStack.length > 0;
+  }
+  get canRedo(): boolean {
+    return this.redoStack.length > 0;
+  }
+}
+
+export interface Bounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
 }
 
 export class CanvasTransform {
-  constructor(width, height) {
+  width: number;
+  height: number;
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+
+  constructor(width: number, height: number) {
     this.width = width;
     this.height = height;
     this.scale = 1;
@@ -37,21 +58,21 @@ export class CanvasTransform {
     this.offsetY = 0;
   }
 
-  worldToScreen(wx, wy) {
+  worldToScreen(wx: number, wy: number): Point2D {
     return {
       x: wx * this.scale + this.offsetX,
       y: this.height - (wy * this.scale + this.offsetY)
     };
   }
 
-  screenToWorld(sx, sy) {
+  screenToWorld(sx: number, sy: number): Point2D {
     return {
       x: (sx - this.offsetX) / this.scale,
       y: (this.height - sy - this.offsetY) / this.scale
     };
   }
 
-  zoom(factor, cx, cy) {
+  zoom(factor: number, cx: number, cy: number): void {
     const before = this.screenToWorld(cx, cy);
     this.scale *= factor;
     const after = this.worldToScreen(before.x, before.y);
@@ -59,12 +80,12 @@ export class CanvasTransform {
     this.offsetY += (this.height - cy) - after.y;
   }
 
-  pan(dx, dy) {
+  pan(dx: number, dy: number): void {
     this.offsetX += dx;
     this.offsetY += dy;
   }
 
-  fitToBounds(bounds, margin = 50) {
+  fitToBounds(bounds: Bounds, margin: number = 50): void {
     const w = bounds.maxX - bounds.minX;
     const h = bounds.maxY - bounds.minY;
     if (w === 0 || h === 0) return;
@@ -79,7 +100,7 @@ export class CanvasTransform {
   }
 }
 
-export function drawGrid(ctx, transform, spacing = 50) {
+export function drawGrid(ctx: CanvasRenderingContext2D, transform: CanvasTransform, spacing: number = 50): void {
   const { width, height, scale } = transform;
   ctx.save();
   ctx.strokeStyle = '#eef2f7';
@@ -106,7 +127,7 @@ export function drawGrid(ctx, transform, spacing = 50) {
   ctx.restore();
 }
 
-export function drawAxes(ctx, transform) {
+export function drawAxes(ctx: CanvasRenderingContext2D, transform: CanvasTransform): void {
   const { width, height } = transform;
   const o = transform.worldToScreen(0, 0);
   ctx.save();
@@ -134,11 +155,11 @@ export function drawAxes(ctx, transform) {
   ctx.restore();
 }
 
-export function polygonToTemplate(points, isHole = false) {
+export function polygonToTemplate(points: Point2D[], isHole: boolean = false): Polygon {
   return new Polygon(points, isHole);
 }
 
-export function createRectTemplate(width, height, cx = 0, cy = 0) {
+export function createRectTemplate(width: number, height: number, cx: number = 0, cy: number = 0): Polygon {
   const hw = width / 2, hh = height / 2;
   return new Polygon([
     { x: cx - hw, y: cy - hh },
@@ -149,7 +170,7 @@ export function createRectTemplate(width, height, cx = 0, cy = 0) {
   ]);
 }
 
-export function createLShape(w1, h1, w2, h2) {
+export function createLShape(w1: number, h1: number, w2: number, h2: number): Polygon {
   return new Polygon([
     { x: 0, y: 0 },
     { x: w1, y: 0 },
@@ -161,7 +182,7 @@ export function createLShape(w1, h1, w2, h2) {
   ]);
 }
 
-export function createIShape(H, B, tf, tw) {
+export function createIShape(H: number, B: number, tf: number, tw: number): Polygon {
   const h = H / 2;
   const b = B / 2;
   return new Polygon([
@@ -181,8 +202,8 @@ export function createIShape(H, B, tf, tw) {
   ]);
 }
 
-export function createHoleCircle(cx, cy, r, nseg = 32) {
-  const pts = [];
+export function createHoleCircle(cx: number, cy: number, r: number, nseg: number = 32): Polygon {
+  const pts: Point2D[] = [];
   for (let i = 0; i <= nseg; i++) {
     const a = (i / nseg) * Math.PI * 2;
     pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
@@ -190,7 +211,7 @@ export function createHoleCircle(cx, cy, r, nseg = 32) {
   return new Polygon(pts, true);
 }
 
-export function stressToColor(value, min, max, type = 'jet') {
+export function stressToColor(value: number, min: number, max: number, type: string = 'jet'): string {
   if (max === min) return '#808080';
   const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
   if (type === 'jet') {
@@ -207,7 +228,7 @@ export function stressToColor(value, min, max, type = 'jet') {
   return `rgb(${r},${Math.round(255 - Math.abs(t - 0.5) * 510)},${b})`;
 }
 
-export function drawArrow(ctx, x1, y1, x2, y2, color = '#e74c3c', size = 8) {
+export function drawArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, color: string = '#e74c3c', size: number = 8): void {
   const angle = Math.atan2(y2 - y1, x2 - x1);
   ctx.save();
   ctx.strokeStyle = color;
@@ -226,8 +247,8 @@ export function drawArrow(ctx, x1, y1, x2, y2, color = '#e74c3c', size = 8) {
   ctx.restore();
 }
 
-export function findNearestPoint(points, x, y, tolerance = 10) {
-  let nearest = null, minDist = tolerance * tolerance;
+export function findNearestPoint(points: Point2D[], x: number, y: number, tolerance: number = 10): number | null {
+  let nearest: number | null = null, minDist = tolerance * tolerance;
   for (let i = 0; i < points.length; i++) {
     const p = points[i];
     const d = (p.x - x) ** 2 + (p.y - y) ** 2;
@@ -236,19 +257,32 @@ export function findNearestPoint(points, x, y, tolerance = 10) {
   return nearest;
 }
 
-export function pointToSegmentDist(px, py, x1, y1, x2, y2) {
+export interface SegmentDistResult {
+  dist: number;
+  t: number;
+  cx: number;
+  cy: number;
+}
+
+export function pointToSegmentDist(px: number, py: number, x1: number, y1: number, x2: number, y2: number): SegmentDistResult {
   const dx = x2 - x1, dy = y2 - y1;
   const len2 = dx * dx + dy * dy;
-  if (len2 === 0) return { dist: Math.hypot(px - x1, py - y1), t: 0 };
+  if (len2 === 0) return { dist: Math.hypot(px - x1, py - y1), t: 0, cx: x1, cy: y1 };
   let t = ((px - x1) * dx + (py - y1) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
   const cx = x1 + t * dx, cy = y1 + t * dy;
   return { dist: Math.hypot(px - cx, py - cy), t, cx, cy };
 }
 
-export function findNearestEdge(polygon, x, y) {
+export interface NearestEdgeResult extends SegmentDistResult {
+  index: number;
+  p1: Point2D;
+  p2: Point2D;
+}
+
+export function findNearestEdge(polygon: Polygon, x: number, y: number): NearestEdgeResult | null {
   const pts = polygon.points;
-  let nearest = null, minDist = Infinity;
+  let nearest: NearestEdgeResult | null = null, minDist = Infinity;
   for (let i = 0; i < pts.length - 1; i++) {
     const res = pointToSegmentDist(x, y, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
     if (res.dist < minDist) {
@@ -259,8 +293,10 @@ export function findNearestEdge(polygon, x, y) {
   return nearest;
 }
 
-export function findNearestNode(nodes, x, y, tolerance = 15) {
-  let nearest = null, minDist = tolerance * tolerance;
+import { Node, TriangleElement } from './types.js';
+
+export function findNearestNode(nodes: Node[], x: number, y: number, tolerance: number = 15): Node | null {
+  let nearest: Node | null = null, minDist = tolerance * tolerance;
   for (const n of nodes) {
     const d = (n.x - x) ** 2 + (n.y - y) ** 2;
     if (d < minDist) { minDist = d; nearest = n; }
@@ -268,7 +304,7 @@ export function findNearestNode(nodes, x, y, tolerance = 15) {
   return nearest;
 }
 
-export function findNearestElement(elements, x, y) {
+export function findNearestElement(elements: TriangleElement[], x: number, y: number): TriangleElement | null {
   for (const el of elements) {
     const [n1, n2, n3] = el.nodes;
     if (pointInTriangle(x, y, n1.x, n1.y, n2.x, n2.y, n3.x, n3.y)) return el;
@@ -276,11 +312,11 @@ export function findNearestElement(elements, x, y) {
   return null;
 }
 
-function sign(x1, y1, x2, y2, x3, y3) {
+function sign(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): number {
   return (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3);
 }
 
-export function pointInTriangle(px, py, x1, y1, x2, y2, x3, y3) {
+export function pointInTriangle(px: number, py: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): boolean {
   const d1 = sign(px, py, x1, y1, x2, y2);
   const d2 = sign(px, py, x2, y2, x3, y3);
   const d3 = sign(px, py, x3, y3, x1, y1);

@@ -1,9 +1,30 @@
-<script>
+<script lang="ts">
 import { onMount, onDestroy, afterUpdate } from 'svelte';
-import { CanvasTransform, drawGrid, drawAxes, drawArrow, findNearestPoint, findNearestNode, findNearestElement, stressToColor, pointInTriangle } from '$lib/canvasUtils.js';
-import { polygons as polysStore, currentPolygonPoints as curPtsStore, drawingMode as drawModeStore, holeMode as holeStore, selectedVertex as selVertStore, nodes as nodesStore, elements as elemsStore, meshAnimStep as meshStepStore, meshAnimSteps as meshStepsStore, material as matStore, planeStress as psStore, thickness as thickStore, bodyForce as bfStore, edgeLoads as eloadsStore, selectedNodes as selNodesStore, femResults as femResStore, postProcessMode as postModeStore, deformationScale as defScaleStore, stressType as sTypeStore, pushUndo, resetGeometry, clearMesh, meshSpacing as spacingStore } from '$lib/stores.js';
-import { Polygon } from '$lib/types.js';
-import { generateSeedsOnBoundary, generateInteriorSeeds, bowyerWatson, solveFEM } from '$lib/fem.js';
+import type { Node, TriangleElement, Polygon } from '$lib/types.js';
+import type { CanvasTransform as CanvasTransformType } from '$lib/canvasUtils.js';
+import {
+  CanvasTransform, drawGrid, drawAxes, drawArrow,
+  findNearestPoint, findNearestNode, findNearestElement,
+  findNearestEdge, stressToColor, pointInTriangle
+} from '$lib/canvasUtils.js';
+import {
+  polygons as polysStore, currentPolygonPoints as curPtsStore,
+  drawingMode as drawModeStore, holeMode as holeStore,
+  selectedVertex as selVertStore, nodes as nodesStore,
+  elements as elemsStore, meshAnimStep as meshStepStore,
+  meshAnimSteps as meshStepsStore, material as matStore,
+  planeStress as psStore, thickness as thickStore,
+  bodyForce as bfStore, edgeLoads as eloadsStore,
+  selectedNodes as selNodesStore, selectedEdges as selEdgesStore,
+  femResults as femResStore, postProcessMode as postModeStore,
+  deformationScale as defScaleStore, stressType as sTypeStore,
+  selectedElement as selElStore, pushUndo, resetGeometry,
+  clearMesh, meshSpacing as spacingStore
+} from '$lib/stores.js';
+import {
+  generateSeedsOnBoundary, generateInteriorSeeds,
+  bowyerWatson, solveFEM
+} from '$lib/fem.js';
 
 export let width = 800;
 export let height = 600;
@@ -20,8 +41,9 @@ let rafId = null;
 
 let curUnsubs = [];
 let st_polys, st_curPts, st_drawMode, st_hole, st_selVert, st_nodes, st_elems;
-let st_meshStep, st_meshSteps, st_mat, st_ps, st_thickness, st_bf, st_eloads, st_selNodes;
-let st_femRes, st_postMode, st_defScale, st_sType, st_spacing;
+let st_meshStep, st_meshSteps, st_mat, st_ps, st_thickness, st_bf, st_eloads, st_selNodes, st_selEdges;
+let st_femRes, st_postMode, st_defScale, st_sType, st_spacing, st_selEl;
+let hoverEdge = null;
 
 onMount(() => {
   transform = new CanvasTransform(width, height);
@@ -30,26 +52,28 @@ onMount(() => {
   transform.offsetX = width / 2;
   transform.offsetY = height / 2;
   curUnsubs = [
-    polysStore.subscribe(v => st_polys = v),
-    curPtsStore.subscribe(v => st_curPts = v),
-    drawModeStore.subscribe(v => st_drawMode = v),
-    holeStore.subscribe(v => st_hole = v),
+    polysStore.subscribe(v => st_polys = Array.isArray(v) ? v : []),
+    curPtsStore.subscribe(v => st_curPts = Array.isArray(v) ? v : []),
+    drawModeStore.subscribe(v => st_drawMode = v || 'select'),
+    holeStore.subscribe(v => st_hole = !!v),
     selVertStore.subscribe(v => st_selVert = v),
-    nodesStore.subscribe(v => st_nodes = v),
-    elemsStore.subscribe(v => st_elems = v),
-    meshStepStore.subscribe(v => st_meshStep = v),
-    meshStepsStore.subscribe(v => st_meshSteps = v),
+    nodesStore.subscribe(v => st_nodes = Array.isArray(v) ? v : []),
+    elemsStore.subscribe(v => st_elems = Array.isArray(v) ? v : []),
+    meshStepStore.subscribe(v => st_meshStep = Number(v) || -1),
+    meshStepsStore.subscribe(v => st_meshSteps = Array.isArray(v) ? v : []),
     matStore.subscribe(v => st_mat = v),
-    psStore.subscribe(v => st_ps = v),
-    thickStore.subscribe(v => st_thickness = v),
+    psStore.subscribe(v => st_ps = v !== false),
+    thickStore.subscribe(v => st_thickness = Number(v) || 0.01),
     bfStore.subscribe(v => st_bf = v),
-    eloadsStore.subscribe(v => st_eloads = v),
-    selNodesStore.subscribe(v => st_selNodes = v),
+    eloadsStore.subscribe(v => st_eloads = Array.isArray(v) ? v : []),
+    selNodesStore.subscribe(v => st_selNodes = v instanceof Set ? v : new Set()),
+    selEdgesStore.subscribe(v => st_selEdges = Array.isArray(v) ? v : []),
     femResStore.subscribe(v => st_femRes = v),
-    postModeStore.subscribe(v => st_postMode = v),
-    defScaleStore.subscribe(v => st_defScale = v),
-    sTypeStore.subscribe(v => st_sType = v),
-    spacingStore.subscribe(v => st_spacing = v)
+    postModeStore.subscribe(v => st_postMode = v || 'deformation'),
+    defScaleStore.subscribe(v => st_defScale = Number(v) || 0),
+    sTypeStore.subscribe(v => st_sType = v || 'vm'),
+    spacingStore.subscribe(v => st_spacing = Number(v) || 30),
+    selElStore.subscribe(v => st_selEl = v)
   ];
   render();
 });
@@ -67,18 +91,21 @@ function render() {
   drawGrid(ctx, transform);
   drawAxes(ctx, transform);
   drawPolygons();
+  drawEdgeSelections();
+  drawEdgeLoads();
   drawCurrentDrawing();
   drawMeshAnim();
   drawFinalMesh();
   drawConstraints();
   drawPostProcess();
+  drawHoverEdgeHighlight();
   drawHoverInfo();
 }
 
 function drawPolygons() {
   for (const poly of st_polys || []) {
-    if (poly.points.length < 2) continue;
-    const isHole = poly.isHole;
+    if (!poly.points || poly.points.length < 2) continue;
+    const isHole = !!poly.isHole;
     const sp = poly.points.map(p => transform.worldToScreen(p.x, p.y));
     ctx.save();
     ctx.beginPath();
@@ -102,9 +129,79 @@ function drawPolygons() {
     ctx.restore();
     for (let i = 0; i < poly.points.length - 1; i++) {
       ctx.beginPath();
-      ctx.arc(sp[i].x, sp[i].y, 5, 0, Math.PI * 2);
+      ctx.arc(sp[i].x, sp[i].y, 4.5, 0, Math.PI * 2);
       ctx.fillStyle = isHole ? '#e67e22' : '#2980b9';
       ctx.fill();
+    }
+  }
+}
+
+function drawEdgeSelections() {
+  if (!st_selEdges || !st_selEdges.length) return;
+  ctx.save();
+  ctx.strokeStyle = '#f1c40f';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  for (const e of st_selEdges) {
+    const p1 = transform.worldToScreen(e.p1.x, e.p1.y);
+    const p2 = transform.worldToScreen(e.p2.x, e.p2.y);
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawHoverEdgeHighlight() {
+  if (st_drawMode !== 'edge' || !hoverEdge) return;
+  const p1 = transform.worldToScreen(hoverEdge.p1.x, hoverEdge.p1.y);
+  const p2 = transform.worldToScreen(hoverEdge.p2.x, hoverEdge.p2.y);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(241,196,15,0.6)';
+  ctx.lineWidth = 6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(p1.x, p1.y);
+  ctx.lineTo(p2.x, p2.y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawEdgeLoads() {
+  if (!st_eloads || !st_eloads.length) return;
+  for (const el of st_eloads) {
+    const p1 = transform.worldToScreen(el.p1.x, el.p1.y);
+    const p2 = transform.worldToScreen(el.p2.x, el.p2.y);
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    const L = Math.hypot(dx, dy);
+    if (L < 1) continue;
+    const tx = dx / L, ty = dy / L;
+    const nx = -ty, ny = tx;
+    const nSteps = Math.max(3, Math.floor(L / 18));
+    const maxP = Math.max(Math.abs(el.normal || 0), Math.abs(el.shear || 0), 1);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(231,76,60,0.3)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+    ctx.restore();
+    for (let i = 0; i <= nSteps; i++) {
+      const t = i / nSteps;
+      const cx = p1.x + tx * L * t;
+      const cy = p1.y + ty * L * t;
+      if (Math.abs(el.normal || 0) > 1e-6) {
+        const len = Math.min(40, 8 + Math.log10(Math.abs(el.normal) + 1) * 12);
+        const sign = el.normal > 0 ? 1 : -1;
+        drawArrow(ctx, cx, cy, cx + nx * len * sign, cy + ny * len * sign, '#e74c3c', 7);
+      }
+      if (Math.abs(el.shear || 0) > 1e-6) {
+        const len = Math.min(35, 7 + Math.log10(Math.abs(el.shear) + 1) * 11);
+        const sign = el.shear > 0 ? 1 : -1;
+        drawArrow(ctx, cx, cy, cx + tx * len * sign, cy + ty * len * sign, '#8e44ad', 6);
+      }
     }
   }
 }
@@ -158,25 +255,27 @@ function drawMeshAnim() {
 }
 
 function drawFinalMesh() {
-  if (!st_elems || !st_elems.length || (st_meshStep >= 0 && st_meshSteps && st_meshSteps.length)) return;
+  if (!st_elems || !st_elems.length) return;
+  if (st_meshStep >= 0 && st_meshSteps && st_meshSteps.length) return;
   let minV = Infinity, maxV = -Infinity;
   const color = st_femRes && (st_postMode === 'stress');
   if (color) {
     for (const el of st_elems) {
-      const s = el.stress || { sx:0, sy:0, sxy:0, vm:0 };
+      const s = el.stress || { sx: 0, sy: 0, sxy: 0, vm: 0 };
       const v = st_sType === 'sx' ? s.sx : st_sType === 'sy' ? s.sy : st_sType === 'sxy' ? s.sxy : s.vm;
       minV = Math.min(minV, v); maxV = Math.max(maxV, v);
     }
   }
   for (const el of st_elems) {
     const ns = el.nodes.map(n => {
-      const scale = st_defScale || 0;
+      const sc = st_defScale || 0;
       if (st_femRes && st_postMode !== 'stress') {
-        return transform.worldToScreen(n.x + (n.ux || 0) * scale, n.y + (n.uy || 0) * scale);
+        return transform.worldToScreen(n.x + (n.ux || 0) * sc, n.y + (n.uy || 0) * sc);
       }
       return transform.worldToScreen(n.x, n.y);
     });
     ctx.save();
+    const isSel = st_selEl && st_selEl.id === el.id;
     if (color) {
       const s = el.stress || {};
       const v = st_sType === 'sx' ? (s.sx || 0) : st_sType === 'sy' ? (s.sy || 0) : st_sType === 'sxy' ? (s.sxy || 0) : (s.vm || 0);
@@ -193,8 +292,8 @@ function drawFinalMesh() {
     ctx.lineTo(ns[1].x, ns[1].y);
     ctx.lineTo(ns[2].x, ns[2].y);
     ctx.closePath();
-    ctx.strokeStyle = '#7f8c8d';
-    ctx.lineWidth = 0.7;
+    ctx.strokeStyle = isSel ? '#e74c3c' : '#7f8c8d';
+    ctx.lineWidth = isSel ? 2.2 : 0.7;
     ctx.stroke();
     ctx.restore();
   }
@@ -217,7 +316,7 @@ function drawFinalMesh() {
   for (const n of st_nodes || []) {
     const sp = transform.worldToScreen(n.x, n.y);
     ctx.beginPath();
-    ctx.arc(sp.x, sp.y, 2.5, 0, Math.PI * 2);
+    ctx.arc(sp.x, sp.y, 2.8, 0, Math.PI * 2);
     ctx.fillStyle = st_selNodes && st_selNodes.has(n.id) ? '#e74c3c' : '#2c3e50';
     ctx.fill();
   }
@@ -329,28 +428,36 @@ function drawPostProcess() {
 }
 
 function drawHoverInfo() {
-  if (!st_nodes || !st_nodes.length || !hoverPos) return;
+  if (!hoverPos) return;
   const wp = transform.screenToWorld(hoverPos.x, hoverPos.y);
-  const nearN = findNearestNode(st_nodes, wp.x, wp.y, 15 / transform.scale);
-  if (nearN) {
-    const sp = transform.worldToScreen(nearN.x, nearN.y);
-    ctx.save();
-    ctx.strokeStyle = '#f39c12';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    ctx.arc(sp.x, sp.y, 10, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    const label = `节点${nearN.id} (${nearN.x.toFixed(1)},${nearN.y.toFixed(1)})` +
-      (st_femRes ? ` u=(${nearN.ux.toExponential(2)},${nearN.uy.toExponential(2)})` : '');
-    ctx.font = '12px monospace';
-    const w = ctx.measureText(label).width;
-    ctx.fillRect(sp.x + 14, sp.y - 20, w + 10, 22);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(label, sp.x + 19, sp.y - 5);
-    ctx.restore();
+  if (st_nodes && st_nodes.length) {
+    const nearN = findNearestNode(st_nodes, wp.x, wp.y, 15 / transform.scale);
+    if (nearN) {
+      const sp = transform.worldToScreen(nearN.x, nearN.y);
+      ctx.save();
+      ctx.strokeStyle = '#f39c12';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 10, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      let label = `节点${nearN.id} (${nearN.x.toFixed(1)},${nearN.y.toFixed(1)})`;
+      if (st_femRes) label += ` u=(${nearN.ux.toExponential(2)},${nearN.uy.toExponential(2)})`;
+      if (nearN.constraints) {
+        const c = nearN.constraints;
+        if (c.ux || c.uy) label += ` 约束:${c.ux ? 'x' : ''}${c.uy ? 'y' : ''}`;
+      }
+      if (nearN.fx || nearN.fy) label += ` F=(${nearN.fx.toFixed(0)},${nearN.fy.toFixed(0)})`;
+      ctx.font = '12px monospace';
+      const w = ctx.measureText(label).width;
+      ctx.fillRect(sp.x + 14, sp.y - 20, w + 10, 22);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, sp.x + 19, sp.y - 5);
+      ctx.restore();
+      return;
+    }
   }
 }
 
@@ -374,18 +481,40 @@ function handleMouseDown(e) {
         curPtsStore.set(pts);
       }
     }
+  } else if (st_drawMode === 'edge') {
+    let found = null;
+    for (let pi = 0; pi < (st_polys || []).length; pi++) {
+      const poly = st_polys[pi];
+      const ne = findNearestEdge(poly, wp.x, wp.y);
+      if (ne && ne.dist < 20 / transform.scale) {
+        found = { polyId: poly.id, polyIdx: pi, edgeIdx: ne.index, p1: ne.p1, p2: ne.p2 };
+        break;
+      }
+    }
+    if (found) {
+      const exists = (st_selEdges || []).some(se => se.polyId === found.polyId && se.edgeIdx === found.edgeIdx);
+      if (e.ctrlKey || e.metaKey) {
+        if (exists) selEdgesStore.set(st_selEdges.filter(se => !(se.polyId === found.polyId && se.edgeIdx === found.edgeIdx)));
+        else selEdgesStore.set([...st_selEdges, found]);
+      } else {
+        selEdgesStore.set(exists ? [] : [found]);
+      }
+    } else {
+      selEdgesStore.set([]);
+    }
   } else if (st_drawMode === 'select') {
     const nearN = findNearestNode(st_nodes || [], wp.x, wp.y, 15 / transform.scale);
     if (nearN) {
       const s = new Set(st_selNodes || []);
       if (e.ctrlKey || e.metaKey) {
         if (s.has(nearN.id)) s.delete(nearN.id); else s.add(nearN.id);
-      } else s.clear(), s.add(nearN.id);
+      } else { s.clear(); s.add(nearN.id); }
       selNodesStore.set(s);
+      selElStore.set(null);
       return;
     }
     const nearEl = findNearestElement(st_elems || [], wp.x, wp.y);
-    if (nearEl) { import('$lib/stores.js').then(m => m.selectedElement.set(nearEl)); selNodesStore.set(new Set()); return; }
+    if (nearEl) { selElStore.set(nearEl); selNodesStore.set(new Set()); return; }
     for (let pi = 0; pi < (st_polys || []).length; pi++) {
       const poly = st_polys[pi];
       const ni = findNearestPoint(poly.points, wp.x, wp.y, 15 / transform.scale);
@@ -397,6 +526,7 @@ function handleMouseDown(e) {
       }
     }
     selNodesStore.set(new Set());
+    selElStore.set(null);
   } else if (st_drawMode === 'constraint') {
     const nearN = findNearestNode(st_nodes || [], wp.x, wp.y, 18 / transform.scale);
     if (nearN) {
@@ -424,6 +554,17 @@ function handleMouseMove(e) {
     dragStart = { x: sx, y: sy };
     requestRender();
     return;
+  }
+  if (st_drawMode === 'edge') {
+    let found = null;
+    for (const poly of (st_polys || [])) {
+      const ne = findNearestEdge(poly, wp.x, wp.y);
+      if (ne && ne.dist < 20 / transform.scale) { found = ne; break; }
+    }
+    hoverEdge = found;
+    canvas.style.cursor = found ? 'pointer' : 'default';
+  } else {
+    hoverEdge = null;
   }
   if (isDragging && st_selVert) {
     const sv = st_selVert;
@@ -508,13 +649,18 @@ export function generateMesh() {
 export function runFEM() {
   if (!st_elems || !st_elems.length) return;
   for (const el of st_elems) el.t = st_thickness || 0.01;
-  const result = solveFEM(st_nodes, st_elems, st_mat, {
-    planeStress: st_ps !== false,
-    bodyForce: st_bf,
-    edgeLoads: st_eloads || []
-  });
-  femResStore.set(result);
-  if (onFEMComplete) onFEMComplete(result);
+  try {
+    const result = solveFEM(st_nodes, st_elems, st_mat, {
+      planeStress: st_ps !== false,
+      bodyForce: st_bf,
+      edgeLoads: st_eloads || []
+    });
+    femResStore.set(result);
+    if (onFEMComplete) onFEMComplete(result);
+  } catch (err) {
+    console.error('solveFEM error:', err);
+    alert('求解失败: ' + (err.message || err));
+  }
   requestRender();
 }
 
@@ -541,5 +687,5 @@ export function fitView() {
   on:mouseleave={handleMouseUp}
   on:dblclick={handleDblClick}
   on:wheel={handleWheel}
-  style="display: block; background: #fafbfc; border-radius: 6px; border: 1px solid #e1e8ed;"
+  style="display: block; background: #fafbfc; border-radius: 6px; border: 1px solid #e1e8ed; flex: 1; min-height: 400px;"
 />

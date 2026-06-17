@@ -1,4 +1,6 @@
-export const levels = [
+import type { Level } from './types.js';
+
+export const levels: Level[] = [
   {
     id: 1,
     name: '关卡1：单个三角形 - 面积计算',
@@ -10,7 +12,7 @@ export const levels = [
         { id: 0, x: 0, y: 0 },
         { id: 1, x: 10, y: 0 },
         { id: 2, x: 5, y: 8 }
-      ],
+      ] as unknown as undefined,
       questions: [
         { field: 'area', label: '三角形面积 A (mm²)', answer: 40, tolerance: 0.5 }
       ]
@@ -28,7 +30,7 @@ export const levels = [
         { id: 0, x: 0, y: 0 },
         { id: 1, x: 4, y: 0 },
         { id: 2, x: 0, y: 3 }
-      ],
+      ] as unknown as undefined,
       questions: [
         { field: 'b1', label: 'b1 = y2 - y3', answer: -3, tolerance: 0.01 },
         { field: 'b2', label: 'b2 = y3 - y1', answer: 3, tolerance: 0.01 },
@@ -52,7 +54,7 @@ export const levels = [
         { id: 0, x: 0, y: 0 },
         { id: 1, x: 0.02, y: 0 },
         { id: 2, x: 0, y: 0.02 }
-      ],
+      ] as unknown as undefined,
       thickness: 0.01,
       questions: [
         { field: 'D11', label: 'D11 (Pa)', answer: 2.1978e11, tolerance: 1e9, relative: true },
@@ -223,7 +225,7 @@ export const levels = [
       params: { w1: 200, h1: 200, w2: 50, h2: 50 },
       meshSize: 15,
       constraints: [{ edge: 'left', type: 'fixed' }],
-      loads: [{ point: { x: 200, y: 50 }, Fx: 0, Fy: -5000 }],
+      loads: [{ point: { x: 200, y: 50 }, Fx: 0, Fy: -5000 } as unknown as Record<string, unknown>],
       tolerance: 0.15
     },
     unlockCondition: '完成全流程建模-网格-求解'
@@ -278,11 +280,11 @@ export const levels = [
   }
 ];
 
-export function getLevelById(id) {
+export function getLevelById(id: number): Level | undefined {
   return levels.find(l => l.id === id);
 }
 
-export function getNextLevel(id) {
+export function getNextLevel(id: number): Level | null {
   const idx = levels.findIndex(l => l.id === id);
   return idx >= 0 && idx < levels.length - 1 ? levels[idx + 1] : null;
 }

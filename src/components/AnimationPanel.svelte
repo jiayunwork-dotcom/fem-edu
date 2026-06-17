@@ -1,14 +1,17 @@
-<script>
-import { onDestroy, onMount } from 'svelte';
+<script lang="ts">
+import { onDestroy } from 'svelte';
+import type { Node, TriangleElement, MaterialData } from '$lib/types.js';
+import type { Matrix, Vector, GaussStep } from '$lib/matrix.js';
 import {
   meshAnimStep, meshAnimSteps, meshAnimPlaying, nodes, elements, material, planeStress,
   femResults, assemblyAnimStep, assemblyAnimPlaying, solverAnimStep, solverAnimPlaying,
   elementAnimStep, elementAnimPlaying, selectedElement
 } from '$lib/stores.js';
 import { computeElementStiffness } from '$lib/fem.js';
+import type { ElementStiffnessResult } from '$lib/fem.js';
 import { formatNumber, gaussEliminationSteps } from '$lib/matrix.js';
 
-export let panel;
+export let panel: boolean;
 
 let current = 'mesh';
 let st_meshStep, st_meshSteps, st_meshPlaying;

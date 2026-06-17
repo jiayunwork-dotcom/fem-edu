@@ -1,5 +1,6 @@
-<script>
+<script lang="ts">
 import { onMount, onDestroy } from 'svelte';
+import type { Level } from '$lib/types.js';
 import MainCanvas from './components/MainCanvas.svelte';
 import Toolbar from './components/Toolbar.svelte';
 import SidePanel from './components/SidePanel.svelte';

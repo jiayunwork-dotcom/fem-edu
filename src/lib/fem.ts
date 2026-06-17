@@ -1,9 +1,28 @@
-import { Node, TriangleElement } from './types.js';
-import { zeros, zerosVec, matMul, matTranspose, matScalar, solveLinearSystem } from './matrix.js';
+import { Node, TriangleElement, Polygon } from './types.js';
+import type { Point2D, MeshStats, BodyForce, EdgeLoad, MaterialData } from './types.js';
+import { zeros, zerosVec, matMul, matTranspose, matScalar, solveLinearSystem, type Matrix, type Vector } from './matrix.js';
 
-export function bowyerWatson(points, boundaryPolygons = [], holePolygons = [], animate = false) {
-  const steps = [];
-  const pts = points.map((p, i) => new Node(i, p.x, p.y));
+export interface MeshAnimStep {
+  type: string;
+  triangles?: Array<Record<string, unknown>>;
+  points?: Point2D[];
+  badTriangles?: Array<Record<string, unknown>>;
+  newTriangles?: Array<Record<string, unknown>>;
+  allTriangles?: Array<Record<string, unknown>>;
+  nodes?: Point2D[];
+  desc?: string;
+  point?: Point2D;
+}
+
+export interface BowyerWatsonResult {
+  triangles: TriangleElement[];
+  nodes: Node[];
+  steps: MeshAnimStep[];
+}
+
+export function bowyerWatson(points: Point2D[], boundaryPolygons: Polygon[] = [], holePolygons: Polygon[] = [], animate: boolean = false): BowyerWatsonResult {
+  const steps: MeshAnimStep[] = [];
+  const pts: Node[] = points.map((p, i) => new Node(i, p.x, p.y));
   if (pts.length < 3) return { triangles: [], nodes: pts, steps };
 
   const xs = pts.map(p => p.x);
@@ -20,9 +39,9 @@ export function bowyerWatson(points, boundaryPolygons = [], holePolygons = [], a
   const p3 = new Node(nodeIdCounter++, midX, midY + delta);
   const allNodes = [...pts, p1, p2, p3];
   const superTri = new TriangleElement(-1, p1, p2, p3);
-  const superIds = new Set([p1.id, p2.id, p3.id]);
+  const superIds = new Set<number>([p1.id, p2.id, p3.id]);
 
-  let triangles = [superTri];
+  let triangles: TriangleElement[] = [superTri];
 
   if (animate) {
     steps.push({ type: 'init', triangles: serializeTriangles(triangles), points: pts.map(p => ({ x: p.x, y: p.y, id: p.id })), desc: '初始化超级三角形' });
@@ -30,14 +49,14 @@ export function bowyerWatson(points, boundaryPolygons = [], holePolygons = [], a
 
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i];
-    const badTriangles = [];
+    const badTriangles: TriangleElement[] = [];
     for (const t of triangles) {
       if (t.containsPoint(p.x, p.y)) badTriangles.push(t);
     }
-    const polygon = [];
+    const polygon: Array<[Node, Node]> = [];
     for (let a = 0; a < badTriangles.length; a++) {
       const ta = badTriangles[a];
-      const edges = [
+      const edges: Array<[Node, Node]> = [
         [ta.nodes[0], ta.nodes[1]],
         [ta.nodes[1], ta.nodes[2]],
         [ta.nodes[2], ta.nodes[0]]
@@ -47,7 +66,7 @@ export function bowyerWatson(points, boundaryPolygons = [], holePolygons = [], a
         for (let b = 0; b < badTriangles.length; b++) {
           if (a === b) continue;
           const tb = badTriangles[b];
-          const e2s = [
+          const e2s: Array<[Node, Node]> = [
             [tb.nodes[0], tb.nodes[1]],
             [tb.nodes[1], tb.nodes[2]],
             [tb.nodes[2], tb.nodes[0]]
@@ -80,8 +99,8 @@ export function bowyerWatson(points, boundaryPolygons = [], holePolygons = [], a
   triangles = triangles.filter(t => !t.nodes.some(n => superIds.has(n.id)));
   const finalNodes = allNodes.filter(n => !superIds.has(n.id));
   for (let i = 0; i < finalNodes.length; i++) finalNodes[i].id = i;
-  const idMap = {};
-  finalNodes.forEach((n, i) => idMap[pts[i].id] = n);
+  const idMap: Record<number, Node> = {};
+  finalNodes.forEach((n, i) => { idMap[pts[i].id] = n; });
   triangles = triangles.map((t, i) => {
     const nt = new TriangleElement(i, idMap[t.nodes[0].id] || t.nodes[0], idMap[t.nodes[1].id] || t.nodes[1], idMap[t.nodes[2].id] || t.nodes[2]);
     return nt;
@@ -111,7 +130,7 @@ export function bowyerWatson(points, boundaryPolygons = [], holePolygons = [], a
   return { triangles, nodes: finalNodes, steps };
 }
 
-function serializeTriangles(tris) {
+function serializeTriangles(tris: TriangleElement[]): Array<Record<string, unknown>> {
   return tris.map(t => ({
     id: t.id,
     nodes: t.nodes.map(n => ({ x: n.x, y: n.y, id: n.id })),
@@ -119,12 +138,12 @@ function serializeTriangles(tris) {
   }));
 }
 
-function edgeEq(e1, e2) {
+function edgeEq(e1: [Node, Node], e2: [Node, Node]): boolean {
   return e1[0].id === e2[0].id && e1[1].id === e2[1].id;
 }
 
-export function generateSeedsOnBoundary(polygons, spacing) {
-  const seeds = [];
+export function generateSeedsOnBoundary(polygons: Polygon[], spacing: number): Point2D[] {
+  const seeds: Point2D[] = [];
   for (const poly of polygons) {
     const pts = poly.points;
     for (let i = 0; i < pts.length - 1; i++) {
@@ -140,8 +159,8 @@ export function generateSeedsOnBoundary(polygons, spacing) {
   return mergeClosePoints(seeds, spacing * 0.5);
 }
 
-export function generateInteriorSeeds(polygon, holePolygons, spacing) {
-  const seeds = [];
+export function generateInteriorSeeds(polygon: Polygon, holePolygons: Polygon[], spacing: number): Point2D[] {
+  const seeds: Point2D[] = [];
   const bb = polygon.boundingBox;
   const margin = spacing * 0.1;
   const minX = bb.minX + margin, maxX = bb.maxX - margin;
@@ -163,8 +182,8 @@ export function generateInteriorSeeds(polygon, holePolygons, spacing) {
   return seeds;
 }
 
-function mergeClosePoints(pts, tol) {
-  const out = [];
+function mergeClosePoints(pts: Point2D[], tol: number): Point2D[] {
+  const out: Point2D[] = [];
   const tol2 = tol * tol;
   for (const p of pts) {
     let dup = false;
@@ -177,13 +196,22 @@ function mergeClosePoints(pts, tol) {
   return out;
 }
 
-export function computeElementStiffness(element, material, planeStress = true) {
+export interface ElementStiffnessResult {
+  Ke: Matrix;
+  B: Matrix;
+  D: Matrix;
+  A: number;
+  coeffs: Array<{ a: number; b: number; c: number }>;
+  BtDB: Matrix;
+}
+
+export function computeElementStiffness(element: TriangleElement, material: MaterialData, planeStress: boolean = true): ElementStiffnessResult {
   const [n1, n2, n3] = element.nodes;
   const x1 = n1.x, y1 = n1.y;
   const x2 = n2.x, y2 = n2.y;
   const x3 = n3.x, y3 = n3.y;
   const A = element.area;
-  if (A < 1e-12) return zeros(6, 6);
+  if (A < 1e-12) return { Ke: zeros(6, 6), B: zeros(3, 6), D: zeros(3, 3), A: 0, coeffs: [], BtDB: zeros(6, 6) };
 
   const a1 = x2 * y3 - x3 * y2;
   const a2 = x3 * y1 - x1 * y3;
@@ -196,7 +224,7 @@ export function computeElementStiffness(element, material, planeStress = true) {
     { a: a3, b: b3, c: c3 }
   ];
 
-  const B = [
+  const B: Matrix = [
     [b1, 0, b2, 0, b3, 0],
     [0, c1, 0, c2, 0, c3],
     [c1, b1, c2, b2, c3, b3]
@@ -211,16 +239,22 @@ export function computeElementStiffness(element, material, planeStress = true) {
   return { Ke, B, D, A, coeffs, BtDB };
 }
 
-export function assembleGlobalSystem(nodes, elements, material, planeStress = true, bodyForce = null) {
+export interface AssemblyResult {
+  K: Matrix;
+  F: Vector;
+  elementKeList: Array<{ element: TriangleElement; Ke: Matrix }>;
+}
+
+export function assembleGlobalSystem(nodes: Node[], elements: TriangleElement[], material: MaterialData, planeStress: boolean = true, bodyForce: BodyForce | null = null): AssemblyResult {
   const N = nodes.length;
   const K = zeros(2 * N, 2 * N);
   const F = zerosVec(2 * N);
-  const elementKeList = [];
+  const elementKeList: Array<{ element: TriangleElement; Ke: Matrix }> = [];
 
   for (const el of elements) {
     const { Ke } = computeElementStiffness(el, material, planeStress);
     elementKeList.push({ element: el, Ke });
-    const dofs = [];
+    const dofs: number[] = [];
     for (const n of el.nodes) {
       dofs.push(n.dofX, n.dofY);
     }
@@ -243,7 +277,7 @@ export function assembleGlobalSystem(nodes, elements, material, planeStress = tr
   return { K, F, elementKeList };
 }
 
-export function applyNodalLoads(nodes, F) {
+export function applyNodalLoads(nodes: Node[], F: Vector): Vector {
   for (const n of nodes) {
     if (n.fx || n.fy) {
       F[n.dofX] += n.fx;
@@ -253,24 +287,25 @@ export function applyNodalLoads(nodes, F) {
   return F;
 }
 
-export function applyEdgeLoads(nodes, elements, edgeLoads, F) {
+export function applyEdgeLoads(nodes: Node[], elements: TriangleElement[], edgeLoads: EdgeLoad[], F: Vector): Vector {
   for (const load of edgeLoads) {
-    const n1 = nodes[load.node1Id];
-    const n2 = nodes[load.node2Id];
+    const n1 = nodes[(load as unknown as { node1Id: number }).node1Id];
+    const n2 = nodes[(load as unknown as { node2Id: number }).node2Id];
+    if (!n1 || !n2) continue;
     const len = Math.hypot(n2.x - n1.x, n2.y - n1.y);
     const dx = (n2.x - n1.x) / len;
     const dy = (n2.y - n1.y) / len;
     let fx1, fy1, fx2, fy2;
-    if (load.type === 'normal') {
+    if ((load as unknown as { type: string }).type === 'normal') {
       const nx = -dy, ny = dx;
-      const totF = load.value * len;
+      const totF = (load as unknown as { value: number }).value * len;
       fx1 = nx * totF / 2;
       fy1 = ny * totF / 2;
       fx2 = nx * totF / 2;
       fy2 = ny * totF / 2;
     } else {
       const tx = dx, ty = dy;
-      const totF = load.value * len;
+      const totF = (load as unknown as { value: number }).value * len;
       fx1 = tx * totF / 2;
       fy1 = ty * totF / 2;
       fx2 = tx * totF / 2;
@@ -284,10 +319,15 @@ export function applyEdgeLoads(nodes, elements, edgeLoads, F) {
   return F;
 }
 
-export function getConstraintVector(nodes) {
+export interface ConstraintResult {
+  constraints: boolean[];
+  springs: Array<{ dof: number; k: number }>;
+}
+
+export function getConstraintVector(nodes: Node[]): ConstraintResult {
   const N = nodes.length;
-  const c = zerosVec(2 * N);
-  const springMods = [];
+  const c: boolean[] = zerosVec(2 * N) as unknown as boolean[];
+  const springMods: Array<{ dof: number; k: number }> = [];
   for (const n of nodes) {
     if (n.constraints.ux) c[n.dofX] = true;
     if (n.constraints.uy) c[n.dofY] = true;
@@ -297,7 +337,21 @@ export function getConstraintVector(nodes) {
   return { constraints: c, springs: springMods };
 }
 
-export function solveFEM(nodes, elements, material, options = {}) {
+export interface FEMOptions {
+  planeStress?: boolean;
+  bodyForce?: BodyForce | null;
+  edgeLoads?: EdgeLoad[];
+}
+
+export interface FEMResult {
+  U: Vector;
+  K: Matrix;
+  F: Vector;
+  elementKeList: Array<{ element: TriangleElement; Ke: Matrix }>;
+  constraints: boolean[];
+}
+
+export function solveFEM(nodes: Node[], elements: TriangleElement[], material: MaterialData, options: FEMOptions = {}): FEMResult {
   const { planeStress = true, bodyForce = null, edgeLoads = [] } = options;
   let { K, F, elementKeList } = assembleGlobalSystem(nodes, elements, material, planeStress, bodyForce);
   F = applyNodalLoads(nodes, F);
@@ -317,18 +371,18 @@ export function solveFEM(nodes, elements, material, options = {}) {
   return { U, K, F, elementKeList, constraints };
 }
 
-export function computeStresses(nodes, elements, material, planeStress = true) {
+export function computeStresses(nodes: Node[], elements: TriangleElement[], material: MaterialData, planeStress: boolean = true): void {
   for (const el of elements) {
     const { B, D } = computeElementStiffness(el, material, planeStress);
-    const u = [];
+    const u: number[] = [];
     for (const n of el.nodes) u.push(n.ux, n.uy);
-    const strain = [];
+    const strain: number[] = [];
     for (let i = 0; i < 3; i++) {
       let s = 0;
       for (let j = 0; j < 6; j++) s += B[i][j] * u[j];
       strain.push(s);
     }
-    const stress = [];
+    const stress: number[] = [];
     for (let i = 0; i < 3; i++) {
       let s = 0;
       for (let j = 0; j < 3; j++) s += D[i][j] * strain[j];
@@ -340,7 +394,7 @@ export function computeStresses(nodes, elements, material, planeStress = true) {
   }
 }
 
-export function getMeshStats(elements) {
+export function getMeshStats(elements: TriangleElement[]): MeshStats | null {
   if (elements.length === 0) return null;
   let minQ = Infinity, maxQ = -Infinity, sumQ = 0;
   let minA = Infinity, minAngle = Infinity, maxAngle = -Infinity;
@@ -361,5 +415,5 @@ export function getMeshStats(elements) {
     minArea: minA,
     minAngle,
     maxAngle
-  };
+  } as unknown as MeshStats;
 }
