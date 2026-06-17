@@ -260,6 +260,10 @@ function onCanvasMouseUp() {
   }
 }
 
+let _clickTimer: ReturnType<typeof setTimeout> | null = null;
+let _pendingClickPos: Point2D | null = null;
+const DBLCLICK_THRESHOLD = 250;
+
 function onCanvasClick(e: MouseEvent) {
   if (sectionType !== 'polygon') return;
   if (isPolygonClosed) return;
@@ -282,13 +286,33 @@ function onCanvasClick(e: MouseEvent) {
     }
   }
 
-  polygonVertices = [...polygonVertices, { x: Math.round(worldPos.x), y: Math.round(worldPos.y) }];
-  recomputeAll();
+  _pendingClickPos = { x: Math.round(worldPos.x), y: Math.round(worldPos.y) };
+
+  if (_clickTimer) {
+    clearTimeout(_clickTimer);
+    _clickTimer = null;
+  }
+
+  _clickTimer = setTimeout(() => {
+    if (_pendingClickPos && !isPolygonClosed) {
+      polygonVertices = [...polygonVertices, _pendingClickPos!];
+      recomputeAll();
+    }
+    _pendingClickPos = null;
+    _clickTimer = null;
+  }, DBLCLICK_THRESHOLD);
 }
 
 function onCanvasDoubleClick(e: MouseEvent) {
   if (sectionType !== 'polygon') return;
   if (isPolygonClosed) return;
+
+  if (_clickTimer) {
+    clearTimeout(_clickTimer);
+    _clickTimer = null;
+  }
+  _pendingClickPos = null;
+
   if (polygonVertices.length >= 3) {
     isPolygonClosed = true;
     recomputeAll();
@@ -413,6 +437,11 @@ function saveToLibrary() {
 }
 
 function close() {
+  if (_clickTimer) {
+    clearTimeout(_clickTimer);
+    _clickTimer = null;
+    _pendingClickPos = null;
+  }
   visible = false;
   editingSection = null;
   dispatch('close');
