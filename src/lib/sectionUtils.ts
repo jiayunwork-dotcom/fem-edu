@@ -4,10 +4,12 @@ import type {
   SectionCircleParams,
   SectionHollowCircleParams,
   SectionTShapeParams,
+  SectionPolygonParams,
   SectionParams,
   SectionProperties,
   CrossSection,
-  SectionValidationErrors
+  SectionValidationErrors,
+  Point2D
 } from './types.js';
 
 export function generateSectionId(): string {
@@ -19,7 +21,8 @@ export function getSectionTypeLabel(type: SectionType): string {
     rectangle: '矩形实心',
     circle: '圆形实心',
     hollowCircle: '空心圆管',
-    tShape: 'T形截面'
+    tShape: 'T形截面',
+    polygon: '自定义多边形'
   };
   return map[type];
 }
@@ -34,6 +37,8 @@ export function getDefaultParams(type: SectionType): SectionParams {
       return { outerDiameter: 100, innerDiameter: 60 };
     case 'tShape':
       return { flangeWidth: 120, flangeThickness: 15, webHeight: 80, webThickness: 12 };
+    case 'polygon':
+      return { vertices: [] };
   }
 }
 
@@ -52,6 +57,8 @@ export function getParamLabels(type: SectionType): Record<string, string> {
         webHeight: '腹板高度 h_w (mm)',
         webThickness: '腹板厚度 t_w (mm)'
       };
+    case 'polygon':
+      return {};
   }
 }
 
@@ -156,6 +163,89 @@ export function computeTShapeProperties(p: SectionTShapeParams): SectionProperti
   };
 }
 
+export function normalizePolygonVertices(vertices: Point2D[]): Point2D[] {
+  if (vertices.length === 0) return [];
+  const minX = Math.min(...vertices.map(p => p.x));
+  const minY = Math.min(...vertices.map(p => p.y));
+  return vertices.map(p => ({
+    x: p.x - minX,
+    y: p.y - minY
+  }));
+}
+
+export function computePolygonProperties(p: SectionPolygonParams): SectionProperties {
+  const { vertices: rawVertices } = p;
+  const vertices = normalizePolygonVertices(rawVertices);
+  const n = vertices.length;
+
+  if (n < 3) {
+    return {
+      area: 0, Ix: 0, Iy: 0, Ip: 0, Wx: 0, Wy: 0,
+      centroidX: 0, centroidY: 0, maxX: 0, maxY: 0
+    };
+  }
+
+  let A = 0;
+  let Sx = 0;
+  let Sy = 0;
+  let IxPrime = 0;
+  let IyPrime = 0;
+
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const xi = vertices[i].x, yi = vertices[i].y;
+    const xj = vertices[j].x, yj = vertices[j].y;
+    const cross = xi * yj - xj * yi;
+
+    A += cross;
+    Sx += (yi + yj) * cross;
+    Sy += (xi + xj) * cross;
+    IxPrime += (yi * yi + yi * yj + yj * yj) * cross;
+    IyPrime += (xi * xi + xi * xj + xj * xj) * cross;
+  }
+
+  A = Math.abs(A) / 2;
+  const signedA = A;
+
+  if (A < 1e-9) {
+    return {
+      area: 0, Ix: 0, Iy: 0, Ip: 0, Wx: 0, Wy: 0,
+      centroidX: 0, centroidY: 0, maxX: 0, maxY: 0
+    };
+  }
+
+  const cx = Sy / (6 * A);
+  const cy = Sx / (6 * A);
+
+  const Ix = Math.abs(IxPrime) / 12 - A * cy * cy;
+  const Iy = Math.abs(IyPrime) / 12 - A * cx * cx;
+  const Ip = Ix + Iy;
+
+  const maxX = Math.max(...vertices.map(p => p.x));
+  const maxY = Math.max(...vertices.map(p => p.y));
+
+  const yDistances = vertices.map(p => Math.abs(p.y - cy));
+  const xDistances = vertices.map(p => Math.abs(p.x - cx));
+  const yMax = Math.max(...yDistances);
+  const xMax = Math.max(...xDistances);
+
+  const Wx = yMax > 0 ? Ix / yMax : 0;
+  const Wy = xMax > 0 ? Iy / xMax : 0;
+
+  return {
+    area: A,
+    Ix: Math.abs(Ix),
+    Iy: Math.abs(Iy),
+    Ip: Math.abs(Ip),
+    Wx: Math.abs(Wx),
+    Wy: Math.abs(Wy),
+    centroidX: Math.abs(cx),
+    centroidY: Math.abs(cy),
+    maxX,
+    maxY
+  };
+}
+
 export function computeSectionProperties(type: SectionType, params: SectionParams): SectionProperties {
   switch (type) {
     case 'rectangle':
@@ -166,6 +256,8 @@ export function computeSectionProperties(type: SectionType, params: SectionParam
       return computeHollowCircleProperties(params as SectionHollowCircleParams);
     case 'tShape':
       return computeTShapeProperties(params as SectionTShapeParams);
+    case 'polygon':
+      return computePolygonProperties(params as SectionPolygonParams);
   }
 }
 
@@ -209,6 +301,13 @@ export function validateSectionParams(type: SectionType, params: SectionParams):
       checkPositive(p.webThickness, 'webThickness', '腹板厚度');
       if (p.flangeWidth > 0 && p.webThickness > 0 && p.flangeWidth <= p.webThickness) {
         errors.flangeWidth = '翼缘宽度必须大于腹板宽度';
+      }
+      break;
+    }
+    case 'polygon': {
+      const p = params as SectionPolygonParams;
+      if (!p.vertices || p.vertices.length < 3) {
+        errors.vertices = '多边形至少需要3个顶点';
       }
       break;
     }

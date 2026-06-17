@@ -9,7 +9,7 @@ import {
   duplicateSectionById,
   assignedSectionId as asgIdStore
 } from '$lib/stores.js';
-import { drawSection, createSectionThumbnail } from '$lib/sectionDraw.js';
+import { drawSection, createSectionThumbnail, drawComparisonSections } from '$lib/sectionDraw.js';
 import {
   getSectionTypeLabel,
   formatArea,
@@ -30,6 +30,13 @@ let st_sections: CrossSection[] = [];
 let st_selected: CrossSection | null = null;
 let st_assignedId: string | null = null;
 
+let comparisonMode = false;
+let selectedSectionIds: Set<string> = new Set();
+let sortBy: 'name' | 'area' | 'Ix' | 'createdAt' = 'name';
+let searchQuery = '';
+
+const COMPARISON_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea'];
+
 let ctxMenu: { show: boolean; x: number; y: number; sectionId: string } = {
   show: false, x: 0, y: 0, sectionId: ''
 };
@@ -38,6 +45,48 @@ let thumbnails: Record<string, string> = {};
 let regenerateThumbs = false;
 
 let unsubs: Array<() => void> = [];
+
+$: filteredAndSortedSections = (() => {
+  let result = [...st_sections];
+
+  if (searchQuery.trim()) {
+    const q = searchQuery.toLowerCase().trim();
+    result = result.filter(s => s.name.toLowerCase().includes(q));
+  }
+
+  result.sort((a, b) => {
+    switch (sortBy) {
+      case 'name':
+        return a.name.localeCompare(b.name, 'zh-CN');
+      case 'area':
+        return b.properties.area - a.properties.area;
+      case 'Ix':
+        return b.properties.Ix - a.properties.Ix;
+      case 'createdAt':
+        return b.createdAt - a.createdAt;
+      default:
+        return 0;
+    }
+  });
+
+  return result;
+})();
+
+$: selectedForComparison = (() => {
+  return st_sections.filter(s => selectedSectionIds.has(s.id));
+})();
+
+function findBestValues(sections: CrossSection[]): Record<string, number> {
+  if (sections.length === 0) return {};
+  return {
+    area: Math.min(...sections.map(s => s.properties.area)),
+    Ix: Math.max(...sections.map(s => s.properties.Ix)),
+    Iy: Math.max(...sections.map(s => s.properties.Iy)),
+    Ip: Math.max(...sections.map(s => s.properties.Ip)),
+    Wx: Math.max(...sections.map(s => s.properties.Wx)),
+    Wy: Math.max(...sections.map(s => s.properties.Wy))
+  };
+}
 
 function buildThumbnails() {
   if (!regenerateThumbs) return;
@@ -57,6 +106,18 @@ function buildThumbnails() {
 
 function renderPreview() {
   if (!previewCtx || !previewCanvas) return;
+
+  if (comparisonMode && selectedForComparison.length >= 2) {
+    drawComparisonSections(
+      previewCtx,
+      previewCanvas.width,
+      previewCanvas.height,
+      selectedForComparison,
+      COMPARISON_COLORS
+    );
+    return;
+  }
+
   if (!st_selected) {
     previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
     previewCtx.fillStyle = '#f8fafc';
@@ -79,6 +140,12 @@ function renderPreview() {
   );
 }
 
+function exitComparisonMode() {
+  comparisonMode = false;
+  selectedSectionIds.clear();
+  renderPreview();
+}
+
 function init() {
   unsubs = [
     csStore.subscribe(v => {
@@ -99,9 +166,32 @@ function onNewSection() {
   showEditor = true;
 }
 
-function onSectionClick(sec: CrossSection) {
+function onSectionClick(e: MouseEvent, sec: CrossSection) {
   hideCtxMenu();
-  selectSection(sec.id);
+
+  if (e.ctrlKey || e.metaKey) {
+    if (selectedSectionIds.has(sec.id)) {
+      selectedSectionIds.delete(sec.id);
+      if (selectedSectionIds.size < 2) {
+        comparisonMode = false;
+      }
+    } else {
+      if (selectedSectionIds.size >= 4) {
+      alert('最多只能选择4个截面进行对比');
+      return;
+    }
+      selectedSectionIds.add(sec.id);
+    if (selectedSectionIds.size >= 2) {
+        comparisonMode = true;
+      }
+    }
+    renderPreview();
+  } else {
+    if (comparisonMode) {
+      exitComparisonMode();
+    }
+    selectSection(sec.id);
+  }
 }
 
 function onSectionDblClick(sec: CrossSection) {
@@ -186,8 +276,10 @@ $: {
 
   <div class="preview-block">
     <div class="block-header">
-      <h3>📐 截面预览</h3>
-      {#if st_selected}
+      <h3>📐 {comparisonMode ? '截面对比' : '截面预览'}</h3>
+      {#if comparisonMode}
+        <button class="exit-compare-btn" on:click={exitComparisonMode}>退出对比</button>
+      {:else if st_selected}
         <span class="assigned-tag" class:active={st_assignedId === st_selected.id}>
           {st_assignedId === st_selected.id ? '✅ 已关联' : '未关联'}
         </span>
@@ -198,7 +290,72 @@ $: {
       <canvas bind:this={previewCanvas} width={280} height={210}></canvas>
     </div>
 
-    {#if st_selected}
+    {#if comparisonMode && selectedForComparison.length >= 2}
+      {@const best = findBestValues(selectedForComparison)}
+      <div class="comparison-legend">
+        {#each selectedForComparison as sec, idx}
+          <div class="legend-item">
+            <span class="legend-color" style="background: {COMPARISON_COLORS[idx % COMPARISON_COLORS.length]}"></span>
+            <span class="legend-name">{sec.name}</span>
+          </div>
+        {/each}
+      </div>
+
+      <div class="comparison-table-wrap">
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th>属性</th>
+              {#each selectedForComparison as sec, idx}
+                <th style="color: {COMPARISON_COLORS[idx % COMPARISON_COLORS.length]}">{sec.name}</th>
+              {/each}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>面积 A</td>
+              {#each selectedForComparison as sec}
+                <td class={sec.properties.area === best.area ? 'best-value' : ''}>{formatArea(sec.properties.area)}</td>
+              {/each}
+            </tr>
+            <tr>
+              <td>惯性矩 Ix</td>
+              {#each selectedForComparison as sec}
+                <td class={sec.properties.Ix === best.Ix ? 'best-value' : ''}>{formatInertia(sec.properties.Ix)}</td>
+              {/each}
+            </tr>
+            <tr>
+              <td>惯性矩 Iy</td>
+              {#each selectedForComparison as sec}
+                <td class={sec.properties.Iy === best.Iy ? 'best-value' : ''}>{formatInertia(sec.properties.Iy)}</td>
+              {/each}
+            </tr>
+            <tr>
+              <td>极惯性矩 Ip</td>
+              {#each selectedForComparison as sec}
+                <td class={sec.properties.Ip === best.Ip ? 'best-value' : ''}>{formatInertia(sec.properties.Ip)}</td>
+              {/each}
+            </tr>
+            <tr>
+              <td>截面模量 Wx</td>
+              {#each selectedForComparison as sec}
+                <td class={sec.properties.Wx === best.Wx ? 'best-value' : ''}>{formatModulus(sec.properties.Wx)}</td>
+              {/each}
+            </tr>
+            <tr>
+              <td>截面模量 Wy</td>
+              {#each selectedForComparison as sec}
+                <td class={sec.properties.Wy === best.Wy ? 'best-value' : ''}>{formatModulus(sec.properties.Wy)}</td>
+              {/each}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="compare-hint">
+        💡 按住 Ctrl 键点击截面卡片可多选/取消（最多4个）
+      </div>
+    {:else if st_selected}
       <div class="props-block">
         <div class="props-title">{st_selected.name}
           <span class="type-chip">{getSectionTypeLabel(st_selected.type)}</span>
@@ -232,7 +389,8 @@ $: {
       </div>
     {:else}
       <div class="empty-hint">
-        💡 从下方列表选择截面查看详情
+        💡 从下方列表选择截面查看详情<br/>
+        <span style="font-size: 10px; color: #94a3b8;">按住 Ctrl 键多选可进入对比模式</span>
       </div>
     {/if}
   </div>
@@ -245,16 +403,40 @@ $: {
       </button>
     </div>
 
-    {#if st_sections.length > 0}
+    <div class="list-controls">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input
+          type="text"
+          class="search-input"
+          placeholder="搜索截面名称..."
+          bind:value={searchQuery}
+        />
+        {#if searchQuery}
+          <button class="clear-search" on:click={() => searchQuery = ''}>×</button>
+        {/if}
+      </div>
+      <select class="sort-select" bind:value={sortBy}>
+        <option value="name">按名称</option>
+        <option value="area">按面积</option>
+        <option value="Ix">按 Ix</option>
+        <option value="createdAt">按创建时间</option>
+      </select>
+    </div>
+
+    {#if filteredAndSortedSections.length > 0}
       <div class="section-list">
-        {#each st_sections as sec (sec.id)}
+        {#each filteredAndSortedSections as sec (sec.id)}
           <div
-            class={`sec-card ${st_selected?.id === sec.id ? 'selected' : ''} ${st_assignedId === sec.id ? 'assigned' : ''}`}
-            on:click={() => onSectionClick(sec)}
+            class={`sec-card ${st_selected?.id === sec.id ? 'selected' : ''} ${st_assignedId === sec.id ? 'assigned' : ''} ${selectedSectionIds.has(sec.id) ? 'multi-selected' : ''}`}
+            on:click={(e) => onSectionClick(e, sec)}
             on:dblclick={() => onSectionDblClick(sec)}
             on:contextmenu={(e) => onSectionRightClick(e, sec)}
           >
             <div class="card-thumb">
+              {#if selectedSectionIds.has(sec.id)}
+                <div class="check-overlay">✓</div>
+              {/if}
               {#if thumbnails[sec.id]}
                 <img src={thumbnails[sec.id]} alt={sec.name} />
               {:else}
@@ -277,10 +459,14 @@ $: {
     {:else}
       <div class="empty-list">
         <div class="empty-icon">📭</div>
-        <div class="empty-text">暂无已保存的截面</div>
-        <button class="create-first-btn" on:click={onNewSection}>
-          创建第一个截面
-        </button>
+        <div class="empty-text">
+          {searchQuery ? '没有匹配的截面' : '暂无已保存的截面'}
+        </div>
+        {#if !searchQuery}
+          <button class="create-first-btn" on:click={onNewSection}>
+            创建第一个截面
+          </button>
+        {/if}
       </div>
     {/if}
   </div>
@@ -655,4 +841,202 @@ $: {
 .ctx-item.danger { color: #dc2626; }
 .ctx-item.danger:hover { background: #fef2f2; color: #b91c1c; }
 .ctx-icon { font-size: 13px; }
+
+.exit-compare-btn {
+  padding: 3px 10px;
+  font-size: 10.5px;
+  font-weight: 600;
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.exit-compare-btn:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.comparison-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #334155;
+  font-weight: 500;
+}
+.legend-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid rgba(0,0,0,0.15);
+}
+
+.comparison-table-wrap {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10.5px;
+}
+.comparison-table th {
+  position: sticky;
+  top: 0;
+  background: #f1f5f9;
+  padding: 6px 8px;
+  text-align: center;
+  font-weight: 600;
+  color: #475569;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 10px;
+}
+.comparison-table td {
+  padding: 5px 8px;
+  text-align: center;
+  border-bottom: 1px solid #f1f5f9;
+  font-family: 'SF Mono', Monaco, monospace;
+  color: #1e293b;
+}
+.comparison-table tbody tr:hover {
+  background: #f8fafc;
+}
+.comparison-table td:first-child {
+  text-align: left;
+  font-weight: 500;
+  color: #64748b;
+  font-family: inherit;
+}
+.comparison-table .best-value {
+  color: #15803d !important;
+  font-weight: 700;
+  background: #dcfce7 !important;
+}
+
+.compare-hint {
+  text-align: center;
+  padding: 6px 10px;
+  font-size: 10px;
+  color: #64748b;
+  background: #f1f5f9;
+  border-radius: 6px;
+}
+
+.list-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 0 2px;
+}
+.search-wrap {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 11px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+.search-input {
+  flex: 1;
+  padding: 6px 28px 6px 28px;
+  font-size: 11.5px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #fff;
+  transition: all 0.15s;
+}
+.search-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+}
+.clear-search {
+  position: absolute;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: #e2e8f0;
+  color: #64748b;
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.clear-search:hover {
+  background: #cbd5e1;
+  color: #334155;
+}
+.sort-select {
+  padding: 6px 28px 6px 10px;
+  font-size: 11.5px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E") no-repeat right 8px center;
+  background-size: 12px;
+  appearance: none;
+  cursor: pointer;
+  font-weight: 500;
+  color: #334155;
+  transition: all 0.15s;
+}
+.sort-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+}
+
+.sec-card.multi-selected {
+  border-color: #16a34a;
+  background: #f0fdf4;
+  box-shadow: 0 0 0 2px rgba(22,163,74,0.15);
+}
+.card-thumb {
+  position: relative;
+}
+.check-overlay {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  background: #16a34a;
+  color: #fff;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.comparison-table-wrap::-webkit-scrollbar { width: 6px; }
+.comparison-table-wrap::-webkit-scrollbar-track { background: transparent; }
+.comparison-table-wrap::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 </style>

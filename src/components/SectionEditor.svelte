@@ -6,10 +6,12 @@ import type {
   SectionCircleParams,
   SectionHollowCircleParams,
   SectionTShapeParams,
+  SectionPolygonParams,
   SectionParams,
   SectionProperties,
   CrossSection,
-  SectionValidationErrors
+  SectionValidationErrors,
+  Point2D
 } from '$lib/types.js';
 import {
   getDefaultParams,
@@ -20,7 +22,8 @@ import {
   createSection,
   formatArea,
   formatInertia,
-  formatModulus
+  formatModulus,
+  normalizePolygonVertices
 } from '$lib/sectionUtils.js';
 import { drawSection } from '$lib/sectionDraw.js';
 import { addSection, updateSectionById } from '$lib/stores.js';
@@ -41,11 +44,17 @@ let properties: SectionProperties;
 
 let unsubs = [];
 
+let polygonVertices: Point2D[] = [];
+let isPolygonClosed = false;
+let draggingVertexIdx: number | null = null;
+let mousePos: Point2D = { x: 0, y: 0 };
+
 const sectionTypes: Array<{ key: SectionType; label: string; icon: string }> = [
   { key: 'rectangle', label: '矩形实心', icon: '▭' },
   { key: 'circle', label: '圆形实心', icon: '○' },
   { key: 'hollowCircle', label: '空心圆管', icon: '◎' },
-  { key: 'tShape', label: 'T形截面', icon: '⊥' }
+  { key: 'tShape', label: 'T形截面', icon: '⊥' },
+  { key: 'polygon', label: '自定义多边形', icon: '⬠' }
 ];
 
 $: {
@@ -54,10 +63,18 @@ $: {
       sectionType = editingSection.type;
       sectionName = editingSection.name;
       params = JSON.parse(JSON.stringify(editingSection.params));
+      if (sectionType === 'polygon') {
+        polygonVertices = JSON.parse(JSON.stringify((params as SectionPolygonParams).vertices || []));
+        isPolygonClosed = polygonVertices.length >= 3;
+      }
     } else {
       sectionType = sectionType || 'rectangle';
       sectionName = '';
       params = JSON.parse(JSON.stringify(getDefaultParams(sectionType)));
+      if (sectionType === 'polygon') {
+        polygonVertices = [];
+        isPolygonClosed = false;
+      }
     }
     recomputeAll();
   }
@@ -67,6 +84,10 @@ function switchType(type: SectionType) {
   sectionType = type;
   params = JSON.parse(JSON.stringify(getDefaultParams(type)));
   errors = {};
+  if (sectionType === 'polygon') {
+    polygonVertices = [];
+    isPolygonClosed = false;
+  }
   recomputeAll();
 }
 
@@ -76,23 +97,239 @@ function updateParam(key: string, val: any) {
   recomputeAll();
 }
 
+function updatePolygonParams() {
+  if (sectionType === 'polygon') {
+    const normalized = normalizePolygonVertices(polygonVertices);
+    params = { vertices: normalized };
+  }
+}
+
 function recomputeAll() {
+  if (sectionType === 'polygon') {
+    updatePolygonParams();
+  }
   errors = validateSectionParams(sectionType, params);
   properties = computeSectionProperties(sectionType, params);
   renderCanvas();
 }
 
+function getPolygonDrawingTransform() {
+  const w = canvas.width;
+  const h = canvas.height;
+  const padding = 45;
+  const drawAreaW = w - padding * 2;
+  const drawAreaH = h - padding * 2;
+
+  let maxX = 0, maxY = 0;
+  if (polygonVertices.length > 0) {
+    const xs = polygonVertices.map(p => p.x);
+    const ys = polygonVertices.map(p => p.y);
+    maxX = Math.max(...xs) + 20;
+    maxY = Math.max(...ys) + 20;
+  }
+
+  const scale = Math.min(drawAreaW / Math.max(maxX, 200), drawAreaH / Math.max(maxY, 200)) * 0.9;
+  const offsetX = (w - Math.max(maxX, 200) * scale) / 2;
+  const offsetY = (h - Math.max(maxY, 200) * scale) / 2;
+
+  const toScreen = (x: number, y: number) => ({
+    x: offsetX + x * scale,
+    y: offsetY + (Math.max(maxY, 200) - y) * scale
+  });
+
+  const fromScreen = (sx: number, sy: number) => ({
+    x: (sx - offsetX) / scale,
+    y: Math.max(maxY, 200) - (sy - offsetY) / scale
+  });
+
+  return { toScreen, fromScreen, scale };
+}
+
+function findVertexAt(sx: number, sy: number): number | null {
+  const { fromScreen, scale } = getPolygonDrawingTransform();
+  const clickRadius = 8 / scale;
+
+  for (let i = 0; i < polygonVertices.length; i++) {
+    const v = polygonVertices[i];
+    const dx = sx - v.x;
+    const dy = sy - v.y;
+    if (Math.hypot(dx, dy) <= clickRadius) {
+      return i;
+    }
+  }
+  return null;
+}
+
+function onCanvasMouseDown(e: MouseEvent) {
+  if (sectionType !== 'polygon') return;
+
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const sx = (e.clientX - rect.left) * scaleX;
+  const sy = (e.clientY - rect.top) * scaleY;
+  const { fromScreen } = getPolygonDrawingTransform();
+  const worldPos = fromScreen(sx, sy);
+
+  if (isPolygonClosed) {
+    const vertexIdx = findVertexAt(worldPos.x, worldPos.y);
+    if (vertexIdx !== null) {
+      draggingVertexIdx = vertexIdx;
+      e.preventDefault();
+    }
+  }
+}
+
+function onCanvasMouseMove(e: MouseEvent) {
+  if (sectionType !== 'polygon') return;
+
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const sx = (e.clientX - rect.left) * scaleX;
+  const sy = (e.clientY - rect.top) * scaleY;
+  const { fromScreen } = getPolygonDrawingTransform();
+  mousePos = fromScreen(sx, sy);
+
+  if (draggingVertexIdx !== null && isPolygonClosed) {
+    polygonVertices[draggingVertexIdx] = { ...mousePos };
+    recomputeAll();
+  } else {
+    renderCanvas();
+  }
+}
+
+function onCanvasMouseUp() {
+  if (draggingVertexIdx !== null) {
+    draggingVertexIdx = null;
+  }
+}
+
+function onCanvasClick(e: MouseEvent) {
+  if (sectionType !== 'polygon') return;
+  if (isPolygonClosed) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const sx = (e.clientX - rect.left) * scaleX;
+  const sy = (e.clientY - rect.top) * scaleY;
+  const { fromScreen } = getPolygonDrawingTransform();
+  const worldPos = fromScreen(sx, sy);
+
+  if (polygonVertices.length >= 3) {
+    const first = polygonVertices[0];
+    const dist = Math.hypot(worldPos.x - first.x, worldPos.y - first.y);
+    if (dist < 15) {
+      isPolygonClosed = true;
+      recomputeAll();
+      return;
+    }
+  }
+
+  polygonVertices.push({ x: Math.round(worldPos.x), y: Math.round(worldPos.y) });
+  recomputeAll();
+}
+
+function onCanvasDoubleClick(e: MouseEvent) {
+  if (sectionType !== 'polygon') return;
+  if (isPolygonClosed) return;
+  if (polygonVertices.length >= 3) {
+    isPolygonClosed = true;
+    recomputeAll();
+  }
+}
+
+function undoLastVertex() {
+  if (sectionType !== 'polygon') return;
+  if (isPolygonClosed) {
+    isPolygonClosed = false;
+  }
+  if (polygonVertices.length > 0) {
+    polygonVertices.pop();
+    recomputeAll();
+  }
+}
+
 function renderCanvas() {
   if (!ctx || !canvas || !properties) return;
-  drawSection(
-    ctx,
-    canvas.width,
-    canvas.height,
-    sectionType,
-    params,
-    properties,
-    { showDimensions: true, showCentroid: true, padding: 45 }
-  );
+
+  if (sectionType === 'polygon') {
+    drawSection(
+      ctx,
+      canvas.width,
+      canvas.height,
+      sectionType,
+      params,
+      properties,
+      { showDimensions: false, showCentroid: isPolygonClosed, padding: 45 }
+    );
+
+    const { toScreen, fromScreen } = getPolygonDrawingTransform();
+
+    if (polygonVertices.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      const last = polygonVertices[polygonVertices.length - 1];
+      const lastScreen = toScreen(last.x, last.y);
+      const mouseScreen = toScreen(mousePos.x, mousePos.y);
+      ctx.moveTo(lastScreen.x, lastScreen.y);
+      ctx.lineTo(mouseScreen.x, mouseScreen.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (polygonVertices.length >= 3 && !isPolygonClosed) {
+      const first = toScreen(polygonVertices[0].x, polygonVertices[0].y);
+      ctx.save();
+      ctx.fillStyle = 'rgba(22, 163, 74, 0.2)';
+      ctx.strokeStyle = '#16a34a';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(first.x, first.y, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#16a34a';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('✓', first.x, first.y);
+      ctx.restore();
+    }
+
+    for (let i = 0; i < polygonVertices.length; i++) {
+      const v = polygonVertices[i];
+      const p = toScreen(v.x, v.y);
+      ctx.save();
+      if (draggingVertexIdx === i) {
+        ctx.fillStyle = '#dc2626';
+      } else if (i === 0 && !isPolygonClosed) {
+        ctx.fillStyle = '#16a34a';
+      } else {
+        ctx.fillStyle = '#2563eb';
+      }
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  } else {
+    drawSection(
+      ctx,
+      canvas.width,
+      canvas.height,
+      sectionType,
+      params,
+      properties,
+      { showDimensions: true, showCentroid: true, padding: 45 }
+    );
+  }
 }
 
 function hasErrors(): boolean {
@@ -100,6 +337,9 @@ function hasErrors(): boolean {
 }
 
 function saveToLibrary() {
+  if (sectionType === 'polygon') {
+    updatePolygonParams();
+  }
   errors = validateSectionParams(sectionType, params);
   if (hasErrors()) {
     return;
@@ -183,29 +423,71 @@ function onKeyDown(e: KeyboardEvent) {
           </div>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">尺寸参数</label>
-          <div class="params-form">
-            {#each Object.entries(getParamLabels(sectionType)) as [key, label]}
-              <div class="param-row">
-                <label class="param-label">{label}</label>
-                <div class="param-input-wrap">
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    class={`param-input ${errors[key] ? 'error' : ''}`}
-                    value={params[key]}
-                    on:input={(e) => updateParam(key, e.target.value)}
-                  />
-                  {#if errors[key]}
-                    <div class="error-msg">{errors[key]}</div>
-                  {/if}
-                </div>
+        {#if sectionType === 'polygon'}
+          <div class="form-group">
+            <label class="form-label">绘制说明</label>
+            <div class="polygon-instructions">
+              <div class="instr-item">
+                <span class="instr-icon">🖱️</span>
+                <span>点击画布添加顶点</span>
               </div>
-            {/each}
+              <div class="instr-item">
+                <span class="instr-icon">✅</span>
+                <span>点击起点或双击闭合</span>
+              </div>
+              <div class="instr-item">
+                <span class="instr-icon">↩️</span>
+                <span>撤销移除最后一个顶点</span>
+              </div>
+              <div class="instr-item">
+                <span class="instr-icon">✋</span>
+                <span>闭合后可拖拽顶点调整</span>
+              </div>
+            </div>
+            <div class="polygon-controls">
+              <button
+                class="undo-btn"
+                on:click={undoLastVertex}
+                disabled={polygonVertices.length === 0}
+              >
+                ↩️ 撤销顶点
+              </button>
+              <span class="vertex-count">
+                已添加 {polygonVertices.length} 个顶点
+                {#if isPolygonClosed}
+                  <span class="closed-badge">已闭合</span>
+                {/if}
+              </span>
+            </div>
+            {#if errors.vertices}
+              <div class="error-msg">{errors.vertices}</div>
+            {/if}
           </div>
-        </div>
+        {:else}
+          <div class="form-group">
+            <label class="form-label">尺寸参数</label>
+            <div class="params-form">
+              {#each Object.entries(getParamLabels(sectionType)) as [key, label]}
+                <div class="param-row">
+                  <label class="param-label">{label}</label>
+                  <div class="param-input-wrap">
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      class={`param-input ${errors[key] ? 'error' : ''}`}
+                      value={params[key]}
+                      on:input={(e) => updateParam(key, e.target.value)}
+                    />
+                    {#if errors[key]}
+                      <div class="error-msg">{errors[key]}</div>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
 
       <div class="right-panel">
@@ -214,7 +496,18 @@ function onKeyDown(e: KeyboardEvent) {
           <span class="preview-type">{getSectionTypeLabel(sectionType)}</span>
         </div>
         <div class="canvas-wrap">
-          <canvas bind:this={canvas} width={380} height={320}></canvas>
+          <canvas
+            bind:this={canvas}
+            width={380}
+            height={320}
+            class:polygon-drawing={sectionType === 'polygon' && !isPolygonClosed}
+            on:mousedown={onCanvasMouseDown}
+            on:mousemove={onCanvasMouseMove}
+            on:mouseup={onCanvasMouseUp}
+            on:mouseleave={onCanvasMouseUp}
+            on:click={onCanvasClick}
+            on:dblclick={onCanvasDoubleClick}
+          ></canvas>
         </div>
         <div class="props-panel">
           <h4>截面属性</h4>
@@ -567,5 +860,77 @@ function onKeyDown(e: KeyboardEvent) {
   background: #f1f5f9;
   color: #1e293b;
   border-color: #94a3b8;
+}
+
+.polygon-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+.instr-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #475569;
+}
+.instr-icon {
+  font-size: 13px;
+  width: 20px;
+  text-align: center;
+}
+
+.polygon-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.undo-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #fff;
+  color: #475569;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.undo-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  color: #1e293b;
+}
+.undo-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.vertex-count {
+  font-size: 11px;
+  color: #64748b;
+  text-align: center;
+  font-weight: 500;
+}
+.closed-badge {
+  margin-left: 6px;
+  padding: 2px 8px;
+  background: #dcfce7;
+  color: #15803d;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+canvas.polygon-drawing {
+  cursor: crosshair;
 }
 </style>

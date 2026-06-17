@@ -4,9 +4,11 @@ import type {
   SectionCircleParams,
   SectionHollowCircleParams,
   SectionTShapeParams,
+  SectionPolygonParams,
   SectionParams,
   SectionProperties,
-  CrossSection
+  CrossSection,
+  Point2D
 } from './types.js';
 
 export interface SectionDrawOptions {
@@ -73,6 +75,9 @@ export function drawSection(
       break;
     case 'tShape':
       drawTShape(ctx, params as SectionTShapeParams, toScreen, opt);
+      break;
+    case 'polygon':
+      drawPolygon(ctx, params as SectionPolygonParams, toScreen, opt);
       break;
   }
   ctx.restore();
@@ -204,6 +209,97 @@ function drawTShape(
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
+}
+
+function drawPolygon(
+  ctx: CanvasRenderingContext2D,
+  params: SectionPolygonParams,
+  toScreen: (x: number, y: number) => { x: number; y: number },
+  opt: Required<SectionDrawOptions>
+) {
+  const { vertices } = params;
+  if (!vertices || vertices.length < 3) return;
+
+  const points = vertices.map(v => toScreen(v.x, v.y));
+
+  ctx.fillStyle = opt.fillColor;
+  ctx.strokeStyle = opt.outlineColor;
+  ctx.lineWidth = 2.5;
+
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+}
+
+export function drawComparisonSections(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  sections: CrossSection[],
+  colors: string[]
+) {
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  let maxMaxX = 0;
+  let maxMaxY = 0;
+  for (const sec of sections) {
+    if (sec.properties.maxX > maxMaxX) maxMaxX = sec.properties.maxX;
+    if (sec.properties.maxY > maxMaxY) maxMaxY = sec.properties.maxY;
+  }
+
+  const padding = 32;
+  const drawAreaW = canvasWidth - padding * 2;
+  const drawAreaH = canvasHeight - padding * 2;
+  const scale = Math.min(drawAreaW / maxMaxX, drawAreaH / maxMaxY) * 0.9;
+  const offsetX = (canvasWidth - maxMaxX * scale) / 2;
+  const offsetY = (canvasHeight - maxMaxY * scale) / 2;
+
+  const toScreen = (x: number, y: number) => ({
+    x: offsetX + x * scale,
+    y: offsetY + (maxMaxY - y) * scale
+  });
+
+  for (let i = 0; i < sections.length; i++) {
+    const sec = sections[i];
+    const color = colors[i % colors.length];
+    const transparentColor = color + '33';
+
+    const opt = {
+      ...DEFAULT_OPTIONS,
+      outlineColor: color,
+      fillColor: transparentColor,
+      showDimensions: false,
+      showCentroid: false,
+      padding
+    };
+
+    ctx.save();
+    switch (sec.type) {
+      case 'rectangle':
+        drawRectangle(ctx, sec.params as SectionRectParams, toScreen, opt as any);
+        break;
+      case 'circle':
+        drawCircle(ctx, sec.params as SectionCircleParams, sec.properties, toScreen, opt as any);
+        break;
+      case 'hollowCircle':
+        drawHollowCircle(ctx, sec.params as SectionHollowCircleParams, sec.properties, toScreen, opt as any);
+        break;
+      case 'tShape':
+        drawTShape(ctx, sec.params as SectionTShapeParams, toScreen, opt as any);
+        break;
+      case 'polygon':
+        drawPolygon(ctx, sec.params as SectionPolygonParams, toScreen, opt as any);
+        break;
+    }
+    ctx.restore();
+  }
 }
 
 function drawCentroid(
@@ -371,6 +467,8 @@ function drawDimensions(
       drawDimLine(dimX2, flangeBotL.y, dimX2, topFlangeL.y, `t_f=${tf}`, dimX2 - 3, (flangeBotL.y + topFlangeL.y) / 2, 'right');
       break;
     }
+    case 'polygon':
+      break;
   }
   ctx.restore();
 }

@@ -312,7 +312,7 @@ export interface LevelScore {
   accuracy: number;
 }
 
-export type SectionType = 'rectangle' | 'circle' | 'hollowCircle' | 'tShape';
+export type SectionType = 'rectangle' | 'circle' | 'hollowCircle' | 'tShape' | 'polygon';
 
 export interface SectionRectParams {
   width: number;
@@ -335,7 +335,11 @@ export interface SectionTShapeParams {
   webThickness: number;
 }
 
-export type SectionParams = SectionRectParams | SectionCircleParams | SectionHollowCircleParams | SectionTShapeParams;
+export interface SectionPolygonParams {
+  vertices: Point2D[];
+}
+
+export type SectionParams = SectionRectParams | SectionCircleParams | SectionHollowCircleParams | SectionTShapeParams | SectionPolygonParams;
 
 export interface SectionProperties {
   area: number;
