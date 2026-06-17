@@ -23,7 +23,7 @@ import {
   showPrincipalStress as spsStore, principalStressScale as pssStore,
   refineMode as rfModeStore, refineSelection as rfSelStore,
   measurements as measStore, measurementFirstPoint as measFirstStore,
-  meshStats as msStore
+  meshStats as msStore, assignedSection as asgStore
 } from '$lib/stores.js';
 import { refineElementsInRegion } from '$lib/fem.js';
 import {
@@ -49,6 +49,7 @@ let st_polys, st_curPts, st_drawMode, st_hole, st_selVert, st_nodes, st_elems;
 let st_meshStep, st_meshSteps, st_mat, st_ps, st_thickness, st_bf, st_eloads, st_selNodes, st_selEdges;
 let st_femRes, st_postMode, st_defScale, st_sType, st_spacing, st_selEl;
 let st_showPS, st_psScale, st_rfMode, st_rfSel, st_measurements, st_measFirst, st_ms;
+let st_asgSection;
 let hoverEdge = null;
 let rectDragStart: { x: number; y: number } | null = null;
 let rectDragCurrent: { x: number; y: number } | null = null;
@@ -88,7 +89,8 @@ onMount(() => {
     rfSelStore.subscribe(v => st_rfSel = v),
     measStore.subscribe(v => st_measurements = Array.isArray(v) ? v : []),
     measFirstStore.subscribe(v => st_measFirst = v),
-    msStore.subscribe(v => st_ms = v)
+    msStore.subscribe(v => st_ms = v),
+    asgStore.subscribe(v => st_asgSection = v || null)
   ];
   render();
 });
@@ -278,10 +280,49 @@ function drawFinalMesh() {
   if (st_meshStep >= 0 && st_meshSteps && st_meshSteps.length) return;
   let minV = Infinity, maxV = -Infinity;
   const color = st_femRes && (st_postMode === 'stress');
+  const isBendMode = st_sType === 'bend_x' || st_sType === 'bend_y' || st_sType === 'bend_combined';
+  let globalCentroid = { x: 0, y: 0 };
+  let bendScale = { x: 1, y: 1 };
+
+  if (color && isBendMode && st_asgSection && st_nodes && st_nodes.length) {
+    let sx = 0, sy = 0;
+    for (const n of st_nodes) { sx += n.x; sy += n.y; }
+    globalCentroid.x = sx / st_nodes.length;
+    globalCentroid.y = sy / st_nodes.length;
+    const props = st_asgSection.properties;
+    const Ix_m4 = props.Ix / 1e12;
+    const Iy_m4 = props.Iy / 1e12;
+    const maxY = Math.max(...st_nodes.map(n => Math.abs(n.y - globalCentroid.y)), 0.01);
+    const maxX = Math.max(...st_nodes.map(n => Math.abs(n.x - globalCentroid.x)), 0.01);
+    const refSmax = 200e6;
+    bendScale.y = Ix_m4 > 0 ? refSmax * Ix_m4 / (maxY + 1e-9) : 1;
+    bendScale.x = Iy_m4 > 0 ? refSmax * Iy_m4 / (maxX + 1e-9) : 1;
+    bendScale.y = Math.max(1e3, Math.min(bendScale.y, 1e9));
+    bendScale.x = Math.max(1e3, Math.min(bendScale.x, 1e9));
+  }
+
+  const getBendStress = (el, type) => {
+    if (!st_asgSection) return 0;
+    const c = el.centroid;
+    const dy = c.y - globalCentroid.y;
+    const dx = c.x - globalCentroid.x;
+    const s_y_from_x = dy * bendScale.y;
+    const s_x_from_y = dx * bendScale.x;
+    if (type === 'bend_x') return s_y_from_x;
+    if (type === 'bend_y') return s_x_from_y;
+    if (type === 'bend_combined') return s_y_from_x + s_x_from_y;
+    return 0;
+  };
+
   if (color) {
     for (const el of st_elems) {
       const s = el.stress || { sx: 0, sy: 0, sxy: 0, vm: 0 };
-      const v = st_sType === 'sx' ? s.sx : st_sType === 'sy' ? s.sy : st_sType === 'sxy' ? s.sxy : s.vm;
+      let v;
+      if (isBendMode && st_asgSection) {
+        v = getBendStress(el, st_sType);
+      } else {
+        v = st_sType === 'sx' ? s.sx : st_sType === 'sy' ? s.sy : st_sType === 'sxy' ? s.sxy : s.vm;
+      }
       minV = Math.min(minV, v); maxV = Math.max(maxV, v);
     }
   }
@@ -297,7 +338,12 @@ function drawFinalMesh() {
     const isSel = st_selEl && st_selEl.id === el.id;
     if (color) {
       const s = el.stress || {};
-      const v = st_sType === 'sx' ? (s.sx || 0) : st_sType === 'sy' ? (s.sy || 0) : st_sType === 'sxy' ? (s.sxy || 0) : (s.vm || 0);
+      let v;
+      if (isBendMode && st_asgSection) {
+        v = getBendStress(el, st_sType);
+      } else {
+        v = st_sType === 'sx' ? (s.sx || 0) : st_sType === 'sy' ? (s.sy || 0) : st_sType === 'sxy' ? (s.sxy || 0) : (s.vm || 0);
+      }
       ctx.fillStyle = stressToColor(v, minV, maxV);
       ctx.beginPath();
       ctx.moveTo(ns[0].x, ns[0].y);

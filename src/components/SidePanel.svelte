@@ -11,10 +11,12 @@ import {
   stressType as stStore, contourLevels as clStore,
   selectedElement as selElemStore, convergenceData as cdStore,
   drawingMode as dmStore, showPrincipalStress as spsStore,
-  principalStressScale as pssStore, measurements as measStore
+  principalStressScale as pssStore, measurements as measStore,
+  assignedSection as asgStore
 } from '$lib/stores.js';
 import { computeElementStiffness } from '$lib/fem.js';
 import { formatNumber } from '$lib/matrix.js';
+import SectionLibrary from './SectionLibrary.svelte';
 
 export let activeTab = 'material';
 
@@ -22,7 +24,7 @@ let unsubs = [];
 let st_material, st_ps = true, st_ps_str = 'stress', st_t = 0.01, st_stats;
 let st_nodes, st_elements, st_femRes, st_postMode, st_defScale;
 let st_stress, st_contour, st_selEl, st_bf, st_eloads, st_selNodes, st_conv, st_selEdges, st_dm;
-let st_showPS, st_psScale, st_measurements;
+let st_showPS, st_psScale, st_measurements, st_asgSection;
 
 function init() {
   unsubs = [
@@ -46,7 +48,8 @@ function init() {
     dmStore.subscribe(v => st_dm = v || 'select'),
     spsStore.subscribe(v => st_showPS = !!v),
     pssStore.subscribe(v => st_psScale = Number(v) || 50),
-    measStore.subscribe(v => st_measurements = Array.isArray(v) ? v : [])
+    measStore.subscribe(v => st_measurements = Array.isArray(v) ? v : []),
+    asgStore.subscribe(v => st_asgSection = v || null)
   ];
 }
 init();
@@ -206,7 +209,7 @@ $: buildConvChart();
 
 <div class="sidebar">
   <div class="tabs">
-    {#each [['material', '材料'], ['bcs', '边界'], ['mesh', '网格'], ['post', '后处理'], ['element', '单元'], ['converge', '收敛'], ['measure', '测量']] as [k, n]}
+    {#each [['material', '材料'], ['bcs', '边界'], ['section', '截面库'], ['mesh', '网格'], ['post', '后处理'], ['element', '单元'], ['converge', '收敛'], ['measure', '测量']] as [k, n]}
       <button class={activeTab === k ? 'active' : ''} on:click={() => activeTab = k}>{n}</button>
     {/each}
   </div>
@@ -286,6 +289,9 @@ $: buildConvChart();
         • 载荷：选节点后输入Fy施加向下力
       </div>
 
+    {:else if activeTab === 'section'}
+      <SectionLibrary {activeTab} />
+
     {:else if activeTab === 'mesh'}
       <h3>网格统计</h3>
       {#if st_stats}
@@ -324,8 +330,18 @@ $: buildConvChart();
             <option value="sx">σ_x</option>
             <option value="sy">σ_y</option>
             <option value="sxy">τ_xy</option>
+            {#if st_asgSection}
+              <option value="bend_x">σ_bend_x (弯曲)</option>
+              <option value="bend_y">σ_bend_y (弯曲)</option>
+              <option value="bend_combined">σ_bend (合成)</option>
+            {/if}
           </select>
         </div>
+        {#if st_asgSection}
+          <div class="hint small">
+            🔗 已关联截面「<b>{st_asgSection.name}</b>」，弯曲应力基于截面惯性矩 Ix={formatNumber(st_asgSection.properties.Ix / 1e4, 2)} cm⁴, Iy={formatNumber(st_asgSection.properties.Iy / 1e4, 2)} cm⁴
+          </div>
+        {/if}
       {/if}
       {#if st_postMode === 'contour'}
         <div class="row"><label>等值线数</label><input type="number" min="3" max="30" bind:value={st_contour} on:change={() => clStore.set(st_contour)} /></div>

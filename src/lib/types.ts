@@ -311,3 +311,55 @@ export interface LevelScore {
   totalQuestions: number;
   accuracy: number;
 }
+
+export type SectionType = 'rectangle' | 'circle' | 'hollowCircle' | 'tShape';
+
+export interface SectionRectParams {
+  width: number;
+  height: number;
+}
+
+export interface SectionCircleParams {
+  diameter: number;
+}
+
+export interface SectionHollowCircleParams {
+  outerDiameter: number;
+  innerDiameter: number;
+}
+
+export interface SectionTShapeParams {
+  flangeWidth: number;
+  flangeThickness: number;
+  webHeight: number;
+  webThickness: number;
+}
+
+export type SectionParams = SectionRectParams | SectionCircleParams | SectionHollowCircleParams | SectionTShapeParams;
+
+export interface SectionProperties {
+  area: number;
+  Ix: number;
+  Iy: number;
+  Ip: number;
+  Wx: number;
+  Wy: number;
+  centroidX: number;
+  centroidY: number;
+  maxX: number;
+  maxY: number;
+}
+
+export interface CrossSection {
+  id: string;
+  name: string;
+  type: SectionType;
+  params: SectionParams;
+  properties: SectionProperties;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SectionValidationErrors {
+  [key: string]: string;
+}

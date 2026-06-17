@@ -7,13 +7,17 @@ import SidePanel from './components/SidePanel.svelte';
 import AnimationPanel from './components/AnimationPanel.svelte';
 import LevelModal from './components/LevelModal.svelte';
 import ScoreReport from './components/ScoreReport.svelte';
-import { viewMode, currentLevelId, femResults } from '$lib/stores.js';
+import SectionAssignPanel from './components/SectionAssignPanel.svelte';
+import {
+  viewMode, currentLevelId, femResults, hasSections
+} from '$lib/stores.js';
 import { getLevelById } from '$lib/levels.js';
 
 let canvasRef;
 let showLevelModal = false;
 let showAnimPanel = false;
 let showScoreReport = false;
+let showAssignPanel = false;
 let sideTab = 'material';
 
 $: curLvObj = $currentLevelId ? getLevelById($currentLevelId) : null;
@@ -33,6 +37,18 @@ function handleKey(e) {}
 
 function handleMeshGenerated() {}
 function handleFEMComplete() {}
+
+function onRunFEMRequest() {
+  if (!$hasSections || $viewMode !== 'sandbox') {
+    canvasRef && canvasRef.runFEM && canvasRef.runFEM();
+    return;
+  }
+  showAssignPanel = true;
+}
+
+function onAssignConfirm() {
+  canvasRef && canvasRef.runFEM && canvasRef.runFEM();
+}
 </script>
 
 <div class="app">
@@ -72,7 +88,7 @@ function handleFEMComplete() {}
 
   <Toolbar
     on:generateMesh={() => canvasRef && canvasRef.generateMesh && canvasRef.generateMesh()}
-    on:runFEM={() => canvasRef && canvasRef.runFEM && canvasRef.runFEM()}
+    on:runFEM={onRunFEMRequest}
     on:fitView={() => canvasRef && canvasRef.fitView && canvasRef.fitView()}
   />
 
@@ -99,6 +115,10 @@ function handleFEMComplete() {}
   {#if showScoreReport}
     <ScoreReport onClose={() => showScoreReport = false} />
   {/if}
+  <SectionAssignPanel
+    bind:visible={showAssignPanel}
+    onConfirm={onAssignConfirm}
+  />
 </div>
 
 <style>

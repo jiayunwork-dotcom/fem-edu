@@ -1,7 +1,8 @@
 import { Node, TriangleElement, Polygon, Material } from './types.js';
-import type { Point2D, EdgeLoad, SelectedEdge, ConvergenceEntry, MeshStats, BodyForce, PolygonState, Measurement, LevelScore } from './types.js';
+import type { Point2D, EdgeLoad, SelectedEdge, ConvergenceEntry, MeshStats, BodyForce, PolygonState, Measurement, LevelScore, CrossSection } from './types.js';
 import { writable, derived, type Writable, type Readable } from 'svelte/store';
 import { UndoRedoManager } from './canvasUtils.js';
+import { createSection, updateSection, duplicateSection as dupSec } from './sectionUtils.js';
 
 export const viewMode: Writable<string> = writable('sandbox');
 export const currentLevelId: Writable<number | null> = writable(null);
@@ -123,3 +124,88 @@ export function clearMesh(): void {
 export const hasGeometry: Readable<boolean> = derived(polygons, ($p: Polygon[]) => $p.length > 0);
 export const hasMesh: Readable<boolean> = derived(elements, ($e: TriangleElement[]) => $e.length > 0);
 export const hasResults: Readable<boolean> = derived(femResults, ($r: unknown) => $r != null);
+
+const SECTIONS_STORAGE_KEY = 'fem_edu_sections_v1';
+
+function loadSectionsFromStorage(): CrossSection[] {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = localStorage.getItem(SECTIONS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed as CrossSection[];
+  } catch (e) {
+    console.warn('加载截面库失败:', e);
+    return [];
+  }
+}
+
+function saveSectionsToStorage(sections: CrossSection[]): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(SECTIONS_STORAGE_KEY, JSON.stringify(sections));
+  } catch (e) {
+    console.warn('保存截面库失败:', e);
+  }
+}
+
+export const crossSections: Writable<CrossSection[]> = writable(loadSectionsFromStorage());
+
+if (typeof window !== 'undefined') {
+  crossSections.subscribe((v) => {
+    saveSectionsToStorage(v);
+  });
+}
+
+export const selectedSectionId: Writable<string | null> = writable(null);
+
+export const selectedSection: Readable<CrossSection | null> = derived(
+  [crossSections, selectedSectionId],
+  ([$sections, $id]) => $sections.find(s => s.id === $id) || null
+);
+
+export const hasSections: Readable<boolean> = derived(crossSections, ($s) => Array.isArray($s) && $s.length > 0);
+
+export const assignedSectionId: Writable<string | null> = writable(null);
+
+export const assignedSection: Readable<CrossSection | null> = derived(
+  [crossSections, assignedSectionId],
+  ([$sections, $id]) => $sections.find(s => s.id === $id) || null
+);
+
+export function addSection(section: CrossSection): void {
+  crossSections.update(prev => [...prev, section]);
+}
+
+export function updateSectionById(id: string, params?: any, name?: string): void {
+  crossSections.update(prev => prev.map(s => {
+    if (s.id === id) {
+      return updateSection(s, params, name);
+    }
+    return s;
+  }));
+}
+
+export function deleteSectionById(id: string): void {
+  crossSections.update(prev => prev.filter(s => s.id !== id));
+  selectedSectionId.update(cur => cur === id ? null : cur);
+  assignedSectionId.update(cur => cur === id ? null : cur);
+}
+
+export function duplicateSectionById(id: string): void {
+  crossSections.update(prev => {
+    const target = prev.find(s => s.id === id);
+    if (!target) return prev;
+    const copy = dupSec(target, prev);
+    return [...prev, copy];
+  });
+}
+
+export function selectSection(id: string | null): void {
+  selectedSectionId.set(id);
+}
+
+export function assignSection(id: string | null): void {
+  assignedSectionId.set(id);
+}
