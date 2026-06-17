@@ -48,6 +48,7 @@ let polygonVertices: Point2D[] = [];
 let isPolygonClosed = false;
 let draggingVertexIdx: number | null = null;
 let mousePos: Point2D = { x: 0, y: 0 };
+let initGuard = false;
 
 const sectionTypes: Array<{ key: SectionType; label: string; icon: string }> = [
   { key: 'rectangle', label: '矩形实心', icon: '▭' },
@@ -57,8 +58,9 @@ const sectionTypes: Array<{ key: SectionType; label: string; icon: string }> = [
   { key: 'polygon', label: '自定义多边形', icon: '⬠' }
 ];
 
-$: {
-  if (visible) {
+function initializeEditor() {
+  initGuard = true;
+  try {
     if (editingSection) {
       sectionType = editingSection.type;
       sectionName = editingSection.name;
@@ -76,9 +78,15 @@ $: {
         isPolygonClosed = false;
       }
     }
-    recomputeAll();
+    errors = validateSectionParams(sectionType, params);
+    properties = computeSectionProperties(sectionType, params);
+    renderCanvas();
+  } finally {
+    initGuard = false;
   }
 }
+
+$: visible, editingSection, visible && initializeEditor();
 
 function switchType(type: SectionType) {
   sectionType = type;

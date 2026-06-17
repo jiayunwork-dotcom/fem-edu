@@ -142,7 +142,7 @@ function renderPreview() {
 
 function exitComparisonMode() {
   comparisonMode = false;
-  selectedSectionIds.clear();
+  selectedSectionIds = new Set();
   renderPreview();
 }
 
@@ -170,8 +170,12 @@ function onSectionClick(e: MouseEvent, sec: CrossSection) {
   hideCtxMenu();
 
   if (e.ctrlKey || e.metaKey) {
+    e.stopPropagation();
+    e.preventDefault();
     if (selectedSectionIds.has(sec.id)) {
-      selectedSectionIds.delete(sec.id);
+      const next = new Set(selectedSectionIds);
+      next.delete(sec.id);
+      selectedSectionIds = next;
       if (selectedSectionIds.size < 2) {
         comparisonMode = false;
       }
@@ -180,7 +184,9 @@ function onSectionClick(e: MouseEvent, sec: CrossSection) {
       alert('最多只能选择4个截面进行对比');
       return;
     }
-      selectedSectionIds.add(sec.id);
+      const next = new Set(selectedSectionIds);
+      next.add(sec.id);
+      selectedSectionIds = next;
     if (selectedSectionIds.size >= 2) {
         comparisonMode = true;
       }
