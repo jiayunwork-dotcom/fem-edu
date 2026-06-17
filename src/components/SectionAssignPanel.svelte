@@ -1,5 +1,5 @@
 <script lang="ts">
-import { onDestroy } from 'svelte';
+import { onMount, onDestroy } from 'svelte';
 import { createEventDispatcher } from 'svelte';
 import type { CrossSection } from '$lib/types.js';
 import {
@@ -48,8 +48,14 @@ function init() {
     asgStore.subscribe(v => { st_assigned = v || null; })
   ];
 }
-init();
-onDestroy(() => unsubs.forEach(u => u()));
+
+onMount(() => {
+  init();
+});
+
+onDestroy(() => {
+  unsubs.forEach(u => u && typeof u === 'function' && u());
+});
 
 function buildThumbnails() {
   try {

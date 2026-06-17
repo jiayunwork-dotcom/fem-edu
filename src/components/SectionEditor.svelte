@@ -79,7 +79,6 @@ function updateParam(key: string, val: any) {
 function recomputeAll() {
   errors = validateSectionParams(sectionType, params);
   properties = computeSectionProperties(sectionType, params);
-  afterUpdate(() => renderCanvas());
   renderCanvas();
 }
 

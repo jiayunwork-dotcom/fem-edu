@@ -4,7 +4,6 @@ import type { CrossSection } from '$lib/types.js';
 import {
   crossSections as csStore,
   selectedSection as selSecStore,
-  selectedSectionId as selSecIdStore,
   selectSection,
   deleteSectionById,
   duplicateSectionById,
@@ -38,27 +37,7 @@ let ctxMenu: { show: boolean; x: number; y: number; sectionId: string } = {
 let thumbnails: Record<string, string> = {};
 let regenerateThumbs = false;
 
-let unsubs = [];
-
-function init() {
-  unsubs = [
-    csStore.subscribe(v => {
-      st_sections = Array.isArray(v) ? v : [];
-      regenerateThumbs = true;
-      afterUpdate(() => buildThumbnails());
-      buildThumbnails();
-    }),
-    selSecStore.subscribe(v => {
-      st_selected = v || null;
-      afterUpdate(() => renderPreview());
-      renderPreview();
-    }),
-    asgIdStore.subscribe(v => { st_assignedId = v; })
-  ];
-}
-
-init();
-onDestroy(() => unsubs.forEach(u => u()));
+let unsubs: Array<() => void> = [];
 
 function buildThumbnails() {
   if (!regenerateThumbs) return;
@@ -98,6 +77,21 @@ function renderPreview() {
     st_selected.properties,
     { showDimensions: true, showCentroid: true, padding: 32 }
   );
+}
+
+function init() {
+  unsubs = [
+    csStore.subscribe(v => {
+      st_sections = Array.isArray(v) ? v : [];
+      regenerateThumbs = true;
+      buildThumbnails();
+    }),
+    selSecStore.subscribe(v => {
+      st_selected = v || null;
+      renderPreview();
+    }),
+    asgIdStore.subscribe(v => { st_assignedId = v; })
+  ];
 }
 
 function onNewSection() {
@@ -157,6 +151,7 @@ function onEditorSaved() {
 }
 
 onMount(() => {
+  init();
   if (previewCanvas) {
     previewCtx = previewCanvas.getContext('2d');
     renderPreview();
@@ -165,6 +160,7 @@ onMount(() => {
 });
 
 onDestroy(() => {
+  unsubs.forEach(u => u && typeof u === 'function' && u());
   document.removeEventListener('click', hideCtxMenu);
 });
 
@@ -312,19 +308,23 @@ $: {
 .section-library {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  height: 100%;
+  gap: 12px;
+  width: 100%;
+  position: relative;
+  z-index: 1;
 }
 
 .block-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   padding-bottom: 6px;
   border-bottom: 2px solid #e8eef5;
+  position: relative;
+  z-index: 2;
 }
-.block-header.with-btn { margin-bottom: 10px; }
+.block-header.with-btn { margin-bottom: 8px; }
 
 .block-header h3 {
   font-size: 13px;
@@ -349,6 +349,8 @@ $: {
 
 .preview-block {
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .preview-canvas-wrap {
@@ -357,12 +359,15 @@ $: {
   overflow: hidden;
   background: #fff;
   box-shadow: inset 0 2px 6px rgba(0,0,0,0.03);
-  margin-bottom: 10px;
+  margin-bottom: 8px;
+  position: relative;
+  z-index: 1;
 }
 .preview-canvas-wrap canvas {
   display: block;
   width: 100%;
   height: auto;
+  max-width: 100%;
 }
 
 .props-block {
@@ -370,6 +375,8 @@ $: {
   border: 1.5px solid #e2e8f0;
   border-radius: 10px;
   padding: 10px 12px;
+  position: relative;
+  z-index: 1;
 }
 .props-title {
   font-size: 12.5px;
@@ -420,21 +427,25 @@ $: {
   color: #64748b;
   background: #f1f5f9;
   border-radius: 8px;
+  position: relative;
+  z-index: 1;
 }
 
 .list-block {
-  flex: 1;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
+  min-height: 200px;
+  overflow: visible;
+  position: relative;
+  z-index: 5;
 }
 
 .new-btn {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 4px 10px;
+  padding: 5px 12px;
   font-size: 11.5px;
   font-weight: 600;
   background: #2563eb;
@@ -444,6 +455,9 @@ $: {
   cursor: pointer;
   transition: all 0.15s;
   box-shadow: 0 2px 4px rgba(37,99,235,0.18);
+  position: relative;
+  z-index: 10;
+  pointer-events: auto;
 }
 .new-btn:hover {
   background: #1d4ed8;
@@ -459,10 +473,13 @@ $: {
 .section-list {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 2px;
   display: flex;
   flex-direction: column;
   gap: 7px;
+  position: relative;
+  z-index: 3;
 }
 .section-list::-webkit-scrollbar { width: 6px; }
 .section-list::-webkit-scrollbar-track { background: transparent; }
@@ -479,6 +496,8 @@ $: {
   cursor: pointer;
   transition: all 0.15s;
   user-select: none;
+  position: relative;
+  z-index: 2;
 }
 .sec-card:hover {
   border-color: #93c5fd;
@@ -561,7 +580,6 @@ $: {
 }
 
 .empty-list {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -571,6 +589,8 @@ $: {
   background: #f8fafc;
   border: 1.5px dashed #cbd5e1;
   border-radius: 10px;
+  position: relative;
+  z-index: 3;
 }
 .empty-icon { font-size: 32px; opacity: 0.6; }
 .empty-text {
@@ -580,7 +600,7 @@ $: {
 }
 .create-first-btn {
   margin-top: 6px;
-  padding: 6px 14px;
+  padding: 7px 16px;
   font-size: 11.5px;
   font-weight: 600;
   background: #dbeafe;
@@ -589,6 +609,9 @@ $: {
   border-radius: 7px;
   cursor: pointer;
   transition: all 0.15s;
+  position: relative;
+  z-index: 10;
+  pointer-events: auto;
 }
 .create-first-btn:hover {
   background: #bfdbfe;
