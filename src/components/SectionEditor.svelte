@@ -48,7 +48,8 @@ let polygonVertices: Point2D[] = [];
 let isPolygonClosed = false;
 let draggingVertexIdx: number | null = null;
 let mousePos: Point2D = { x: 0, y: 0 };
-let initGuard = false;
+let _lastVisible = false;
+let _lastEditId: string | '__new__' | null = null;
 
 const sectionTypes: Array<{ key: SectionType; label: string; icon: string }> = [
   { key: 'rectangle', label: '矩形实心', icon: '▭' },
@@ -58,41 +59,82 @@ const sectionTypes: Array<{ key: SectionType; label: string; icon: string }> = [
   { key: 'polygon', label: '自定义多边形', icon: '⬠' }
 ];
 
-function initializeEditor() {
-  initGuard = true;
-  try {
-    if (editingSection) {
-      sectionType = editingSection.type;
-      sectionName = editingSection.name;
-      params = JSON.parse(JSON.stringify(editingSection.params));
-      if (sectionType === 'polygon') {
-        polygonVertices = JSON.parse(JSON.stringify((params as SectionPolygonParams).vertices || []));
-        isPolygonClosed = polygonVertices.length >= 3;
-      }
-    } else {
-      sectionType = sectionType || 'rectangle';
-      sectionName = '';
-      params = JSON.parse(JSON.stringify(getDefaultParams(sectionType)));
-      if (sectionType === 'polygon') {
-        polygonVertices = [];
-        isPolygonClosed = false;
-      }
-    }
-    errors = validateSectionParams(sectionType, params);
-    properties = computeSectionProperties(sectionType, params);
-    renderCanvas();
-  } finally {
-    initGuard = false;
+function _resetToDefaults() {
+  sectionType = 'rectangle';
+  sectionName = '';
+  params = JSON.parse(JSON.stringify(getDefaultParams('rectangle')));
+  polygonVertices = [];
+  isPolygonClosed = false;
+  errors = {};
+  properties = computeSectionProperties('rectangle', params);
+}
+
+function _loadEditingSection() {
+  if (!editingSection) return;
+  const newType = editingSection.type;
+  const newParams = JSON.parse(JSON.stringify(editingSection.params));
+  sectionType = newType;
+  sectionName = editingSection.name;
+  params = newParams;
+  if (newType === 'polygon') {
+    const verts: Point2D[] = (newParams as SectionPolygonParams).vertices || [];
+    polygonVertices = verts.slice();
+    isPolygonClosed = verts.length >= 3;
+  } else {
+    polygonVertices = [];
+    isPolygonClosed = false;
   }
 }
 
-$: visible, editingSection, visible && initializeEditor();
+function _loadNewDefaults() {
+  if (!sectionType || sectionType === undefined) {
+    sectionType = 'rectangle';
+  }
+  const t = sectionType;
+  params = JSON.parse(JSON.stringify(getDefaultParams(t)));
+  sectionName = '';
+  if (t === 'polygon') {
+    polygonVertices = [];
+    isPolygonClosed = false;
+  }
+}
+
+function _initOnceOnOpen() {
+  if (!visible) {
+    _lastVisible = false;
+    _lastEditId = null;
+    return;
+  }
+  const currentEditId: string | '__new__' = editingSection ? editingSection.id : '__new__';
+  const shouldInit = !_lastVisible || _lastEditId !== currentEditId;
+  if (!shouldInit) return;
+
+  if (editingSection) {
+    _loadEditingSection();
+  } else {
+    _loadNewDefaults();
+  }
+
+  errors = validateSectionParams(sectionType, params);
+  properties = computeSectionProperties(sectionType, params);
+  if (ctx && canvas) {
+    renderCanvas();
+  }
+
+  _lastVisible = true;
+  _lastEditId = currentEditId;
+}
+
+$: visible, editingSection, _initOnceOnOpen();
 
 function switchType(type: SectionType) {
   sectionType = type;
   params = JSON.parse(JSON.stringify(getDefaultParams(type)));
   errors = {};
-  if (sectionType === 'polygon') {
+  if (type === 'polygon') {
+    polygonVertices = [];
+    isPolygonClosed = false;
+  } else {
     polygonVertices = [];
     isPolygonClosed = false;
   }
@@ -200,7 +242,12 @@ function onCanvasMouseMove(e: MouseEvent) {
   mousePos = fromScreen(sx, sy);
 
   if (draggingVertexIdx !== null && isPolygonClosed) {
-    polygonVertices[draggingVertexIdx] = { ...mousePos };
+    const next = polygonVertices.slice();
+    next[draggingVertexIdx] = {
+      x: Math.round(mousePos.x),
+      y: Math.round(mousePos.y)
+    };
+    polygonVertices = next;
     recomputeAll();
   } else {
     renderCanvas();
@@ -235,7 +282,7 @@ function onCanvasClick(e: MouseEvent) {
     }
   }
 
-  polygonVertices.push({ x: Math.round(worldPos.x), y: Math.round(worldPos.y) });
+  polygonVertices = [...polygonVertices, { x: Math.round(worldPos.x), y: Math.round(worldPos.y) }];
   recomputeAll();
 }
 
@@ -254,7 +301,7 @@ function undoLastVertex() {
     isPolygonClosed = false;
   }
   if (polygonVertices.length > 0) {
-    polygonVertices.pop();
+    polygonVertices = polygonVertices.slice(0, -1);
     recomputeAll();
   }
 }
@@ -375,10 +422,11 @@ function handleBackdropClick(e: MouseEvent) {
   if (e.target === e.currentTarget) close();
 }
 
+let _afterInitDone = false;
+
 onMount(() => {
-  if (canvas) {
+  if (canvas && !ctx) {
     ctx = canvas.getContext('2d');
-    recomputeAll();
   }
 });
 
@@ -386,7 +434,13 @@ afterUpdate(() => {
   if (canvas && !ctx) {
     ctx = canvas.getContext('2d');
   }
-  renderCanvas();
+  if (ctx && !_afterInitDone && visible) {
+    _afterInitDone = true;
+    try { renderCanvas(); } catch (_) {}
+  }
+  if (!visible) {
+    _afterInitDone = false;
+  }
 });
 
 function onKeyDown(e: KeyboardEvent) {
