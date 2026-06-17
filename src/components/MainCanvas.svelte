@@ -19,8 +19,13 @@ import {
   femResults as femResStore, postProcessMode as postModeStore,
   deformationScale as defScaleStore, stressType as sTypeStore,
   selectedElement as selElStore, pushUndo, resetGeometry,
-  clearMesh, meshSpacing as spacingStore
+  clearMesh, meshSpacing as spacingStore,
+  showPrincipalStress as spsStore, principalStressScale as pssStore,
+  refineMode as rfModeStore, refineSelection as rfSelStore,
+  measurements as measStore, measurementFirstPoint as measFirstStore,
+  meshStats as msStore
 } from '$lib/stores.js';
+import { refineElementsInRegion } from '$lib/fem.js';
 import {
   generateSeedsOnBoundary, generateInteriorSeeds,
   bowyerWatson, solveFEM
@@ -43,7 +48,10 @@ let curUnsubs = [];
 let st_polys, st_curPts, st_drawMode, st_hole, st_selVert, st_nodes, st_elems;
 let st_meshStep, st_meshSteps, st_mat, st_ps, st_thickness, st_bf, st_eloads, st_selNodes, st_selEdges;
 let st_femRes, st_postMode, st_defScale, st_sType, st_spacing, st_selEl;
+let st_showPS, st_psScale, st_rfMode, st_rfSel, st_measurements, st_measFirst, st_ms;
 let hoverEdge = null;
+let rectDragStart: { x: number; y: number } | null = null;
+let rectDragCurrent: { x: number; y: number } | null = null;
 
 onMount(() => {
   transform = new CanvasTransform(width, height);
@@ -73,7 +81,14 @@ onMount(() => {
     defScaleStore.subscribe(v => st_defScale = Number(v) || 0),
     sTypeStore.subscribe(v => st_sType = v || 'vm'),
     spacingStore.subscribe(v => st_spacing = Number(v) || 30),
-    selElStore.subscribe(v => st_selEl = v)
+    selElStore.subscribe(v => st_selEl = v),
+    spsStore.subscribe(v => st_showPS = !!v),
+    pssStore.subscribe(v => st_psScale = Number(v) || 50),
+    rfModeStore.subscribe(v => st_rfMode = !!v),
+    rfSelStore.subscribe(v => st_rfSel = v),
+    measStore.subscribe(v => st_measurements = Array.isArray(v) ? v : []),
+    measFirstStore.subscribe(v => st_measFirst = v),
+    msStore.subscribe(v => st_ms = v)
   ];
   render();
 });
@@ -96,8 +111,12 @@ function render() {
   drawCurrentDrawing();
   drawMeshAnim();
   drawFinalMesh();
+  drawPrincipalStress();
+  drawMeasurements();
   drawConstraints();
   drawPostProcess();
+  drawRefineSelection();
+  drawMeasurementFirstPoint();
   drawHoverEdgeHighlight();
   drawHoverInfo();
 }
@@ -427,6 +446,125 @@ function drawPostProcess() {
   }
 }
 
+function drawPrincipalStress() {
+  if (!st_showPS || !st_femRes || !st_elems || !st_elems.length) return;
+  let maxAbs = 0;
+  for (const el of st_elems) {
+    if (el.stress && el.stress.s1 != null && el.stress.s2 != null) {
+      maxAbs = Math.max(maxAbs, Math.abs(el.stress.s1), Math.abs(el.stress.s2));
+    }
+  }
+  if (maxAbs < 1e-9) return;
+  const scale = (st_psScale || 50) / transform.scale;
+  for (const el of st_elems) {
+    if (!el.stress || el.stress.s1 == null || el.stress.s2 == null || el.stress.theta1 == null || el.stress.theta2 == null) continue;
+    const c = el.centroid;
+    const sc = transform.worldToScreen(c.x, c.y);
+    const { s1, s2, theta1, theta2 } = el.stress;
+    const len1 = (Math.abs(s1) / maxAbs) * scale;
+    const len2 = (Math.abs(s2) / maxAbs) * scale;
+    if (len1 > 0.5 / transform.scale) {
+      const dx1 = Math.cos(theta1) * len1;
+      const dy1 = Math.sin(theta1) * len1;
+      const p1s = transform.worldToScreen(c.x - dx1 / 2, c.y - dy1 / 2);
+      const p1e = transform.worldToScreen(c.x + dx1 / 2, c.y + dy1 / 2);
+      ctx.save();
+      ctx.strokeStyle = s1 > 0 ? '#e74c3c' : '#3498db';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(p1s.x, p1s.y);
+      ctx.lineTo(p1e.x, p1e.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (len2 > 0.5 / transform.scale) {
+      const dx2 = Math.cos(theta2) * len2;
+      const dy2 = Math.sin(theta2) * len2;
+      const p2s = transform.worldToScreen(c.x - dx2 / 2, c.y - dy2 / 2);
+      const p2e = transform.worldToScreen(c.x + dx2 / 2, c.y + dy2 / 2);
+      ctx.save();
+      ctx.strokeStyle = s2 > 0 ? '#e74c3c' : '#3498db';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(p2s.x, p2s.y);
+      ctx.lineTo(p2e.x, p2e.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+function drawMeasurements() {
+  if (!st_measurements || !st_measurements.length) return;
+  for (const m of st_measurements) {
+    const p1 = transform.worldToScreen(m.p1.x, m.p1.y);
+    const p2 = transform.worldToScreen(m.p2.x, m.p2.y);
+    const midX = (p1.x + p2.x) / 2;
+    const midY = (p1.y + p2.y) / 2;
+    ctx.save();
+    ctx.strokeStyle = '#9b59b6';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#9b59b6';
+    ctx.beginPath();
+    ctx.arc(p1.x, p1.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(p2.x, p2.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    const label = m.distance.toFixed(3);
+    ctx.font = 'bold 12px monospace';
+    const w = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(155, 89, 182, 0.9)';
+    ctx.fillRect(midX - w / 2 - 6, midY - 10, w + 12, 18);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, midX, midY - 1);
+    ctx.restore();
+  }
+}
+
+function drawRefineSelection() {
+  if (!st_rfMode || !rectDragStart || !rectDragCurrent) return;
+  const x1 = Math.min(rectDragStart.x, rectDragCurrent.x);
+  const y1 = Math.min(rectDragStart.y, rectDragCurrent.y);
+  const w = Math.abs(rectDragCurrent.x - rectDragStart.x);
+  const h = Math.abs(rectDragCurrent.y - rectDragStart.y);
+  ctx.save();
+  ctx.strokeStyle = '#e67e22';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(x1, y1, w, h);
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(230, 126, 34, 0.1)';
+  ctx.fillRect(x1, y1, w, h);
+  ctx.restore();
+}
+
+function drawMeasurementFirstPoint() {
+  if (st_drawMode !== 'measure' || !st_measFirst) return;
+  const p = transform.worldToScreen(st_measFirst.x, st_measFirst.y);
+  ctx.save();
+  ctx.strokeStyle = '#9b59b6';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(155, 89, 182, 0.3)';
+  ctx.fill();
+  ctx.fillStyle = '#9b59b6';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('P1', p.x, p.y - 14);
+  ctx.restore();
+}
+
 function drawHoverInfo() {
   if (!hoverPos) return;
   const wp = transform.screenToWorld(hoverPos.x, hoverPos.y);
@@ -469,6 +607,29 @@ function handleMouseDown(e) {
     isPanning = true;
     dragStart = { x: sx, y: sy };
     canvas.style.cursor = 'grabbing';
+    return;
+  }
+  if (st_rfMode && e.button === 0) {
+    rectDragStart = { x: sx, y: sy };
+    rectDragCurrent = { x: sx, y: sy };
+    canvas.style.cursor = 'crosshair';
+    return;
+  }
+  if (st_drawMode === 'measure' && e.button === 0) {
+    if (!st_measFirst) {
+      measFirstStore.set({ x: wp.x, y: wp.y });
+    } else {
+      const p1 = st_measFirst;
+      const p2 = { x: wp.x, y: wp.y };
+      const distance = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      const newMeas = {
+        id: Date.now(),
+        p1, p2, distance,
+        timestamp: Date.now()
+      };
+      measStore.set([...(st_measurements || []), newMeas]);
+      measFirstStore.set(null);
+    }
     return;
   }
   if (st_drawMode === 'draw') {
@@ -555,6 +716,14 @@ function handleMouseMove(e) {
     requestRender();
     return;
   }
+  if (st_rfMode && rectDragStart) {
+    rectDragCurrent = { x: sx, y: sy };
+    requestRender();
+    return;
+  }
+  if (st_drawMode === 'measure') {
+    canvas.style.cursor = 'crosshair';
+  }
   if (st_drawMode === 'edge') {
     let found = null;
     for (const poly of (st_polys || [])) {
@@ -562,7 +731,7 @@ function handleMouseMove(e) {
       if (ne && ne.dist < 20 / transform.scale) { found = ne; break; }
     }
     hoverEdge = found;
-    canvas.style.cursor = found ? 'pointer' : 'default';
+    canvas.style.cursor = found ? 'pointer' : st_drawMode === 'measure' ? 'crosshair' : 'default';
   } else {
     hoverEdge = null;
   }
@@ -587,6 +756,45 @@ function handleMouseMove(e) {
 
 function handleMouseUp() {
   if (isDragging && st_selVert) pushUndo();
+  if (st_rfMode && rectDragStart && rectDragCurrent) {
+    const wp1 = transform.screenToWorld(rectDragStart.x, rectDragStart.y);
+    const wp2 = transform.screenToWorld(rectDragCurrent.x, rectDragCurrent.y);
+    const dx = Math.abs(wp2.x - wp1.x);
+    const dy = Math.abs(wp2.y - wp1.y);
+    if (dx > 1 && dy > 1 && st_nodes && st_elems && st_elems.length > 0) {
+      try {
+        const { nodes: newNodes, elements: newElements } = refineElementsInRegion(
+          st_nodes, st_elems,
+          wp1.x, wp1.y, wp2.x, wp2.y,
+          st_thickness || 0.01
+        );
+        nodesStore.set(newNodes);
+        elemsStore.set(newElements);
+        import('$lib/fem.js').then(m => {
+          const ms = m.getMeshStats(newElements);
+          import('$lib/stores.js').then(m2 => m2.meshStats.set(ms));
+        });
+        if (st_femRes) {
+          try {
+            const result = solveFEM(newNodes, newElements, st_mat, {
+              planeStress: st_ps !== false,
+              bodyForce: st_bf,
+              edgeLoads: st_eloads || []
+            });
+            femResStore.set(result);
+          } catch (err) {
+            console.error('Re-solve error:', err);
+          }
+        }
+      } catch (err) {
+        console.error('Refine error:', err);
+        alert('网格加密失败: ' + (err.message || err));
+      }
+    }
+    rectDragStart = null;
+    rectDragCurrent = null;
+    rfModeStore.set(false);
+  }
   isDragging = false;
   isPanning = false;
   selVertStore.set(null);

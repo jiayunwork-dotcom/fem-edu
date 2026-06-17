@@ -6,12 +6,14 @@ import Toolbar from './components/Toolbar.svelte';
 import SidePanel from './components/SidePanel.svelte';
 import AnimationPanel from './components/AnimationPanel.svelte';
 import LevelModal from './components/LevelModal.svelte';
+import ScoreReport from './components/ScoreReport.svelte';
 import { viewMode, currentLevelId, femResults } from '$lib/stores.js';
 import { getLevelById } from '$lib/levels.js';
 
 let canvasRef;
 let showLevelModal = false;
 let showAnimPanel = false;
+let showScoreReport = false;
 let sideTab = 'material';
 
 $: curLvObj = $currentLevelId ? getLevelById($currentLevelId) : null;
@@ -52,6 +54,9 @@ function handleFEMComplete() {}
       <button class="nav-btn" on:click={() => showAnimPanel = !showAnimPanel} class:hilite={$femResults}>
         🎬 动画演示
       </button>
+      <button class="nav-btn" on:click={() => showScoreReport = true}>
+        📊 成绩报告
+      </button>
       <a class="nav-btn help" href="https://zh.wikipedia.org/wiki/%E6%9C%89%E9%99%90%E5%85%83%E6%B3%95" target="_blank">
         📖 帮助
       </a>
@@ -90,6 +95,9 @@ function handleFEMComplete() {}
   <AnimationPanel bind:panel={showAnimPanel} />
   {#if showLevelModal}
     <LevelModal onClose={() => showLevelModal = false} />
+  {/if}
+  {#if showScoreReport}
+    <ScoreReport onClose={() => showScoreReport = false} />
   {/if}
 </div>
 

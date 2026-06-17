@@ -1,5 +1,5 @@
 import { Node, TriangleElement, Polygon, Material } from './types.js';
-import type { Point2D, EdgeLoad, SelectedEdge, ConvergenceEntry, MeshStats, BodyForce, PolygonState } from './types.js';
+import type { Point2D, EdgeLoad, SelectedEdge, ConvergenceEntry, MeshStats, BodyForce, PolygonState, Measurement, LevelScore } from './types.js';
 import { writable, derived, type Writable, type Readable } from 'svelte/store';
 import { UndoRedoManager } from './canvasUtils.js';
 
@@ -49,6 +49,19 @@ export const elementAnimPlaying: Writable<boolean> = writable(false);
 
 export const convergenceData: Writable<ConvergenceEntry[]> = writable([]);
 
+export const showPrincipalStress: Writable<boolean> = writable(false);
+export const principalStressScale: Writable<number> = writable(50);
+
+export const refineMode: Writable<boolean> = writable(false);
+export const refineSelection: Writable<{ x1: number; y1: number; x2: number; y2: number } | null> = writable(null);
+
+export const measurements: Writable<Measurement[]> = writable([]);
+export const measurementFirstPoint: Writable<Point2D | null> = writable(null);
+
+export const levelScores: Writable<LevelScore[]> = writable([]);
+export const levelAttempts: Writable<Record<number, number>> = writable({});
+export const levelStartTime: Writable<Record<number, number>> = writable({});
+
 export const undoRedo: UndoRedoManager = new UndoRedoManager();
 
 export function pushUndo(): void {
@@ -63,7 +76,7 @@ export function doUndo(): void {
   let cur: Polygon[] | undefined;
   polygons.subscribe(v => { cur = v; })();
   if (!cur) return;
-  const state = undoRedo.undo(cur.map(p => ({ points: p.points, isHole: p.isHole, id: p.id })));
+  const state = undoRedo.undo({ polygons: cur.map(p => ({ points: p.points, isHole: p.isHole, id: p.id })) });
   if (state) {
     polygons.set((state as { polygons: PolygonState[] }).polygons.map(sp => {
       const p = new Polygon(sp.points, sp.isHole);
@@ -77,7 +90,7 @@ export function doRedo(): void {
   let cur: Polygon[] | undefined;
   polygons.subscribe(v => { cur = v; })();
   if (!cur) return;
-  const state = undoRedo.redo(cur.map(p => ({ points: p.points, isHole: p.isHole, id: p.id })));
+  const state = undoRedo.redo({ polygons: cur.map(p => ({ points: p.points, isHole: p.isHole, id: p.id })) });
   if (state) {
     polygons.set((state as { polygons: PolygonState[] }).polygons.map(sp => {
       const p = new Polygon(sp.points, sp.isHole);

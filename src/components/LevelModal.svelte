@@ -1,8 +1,8 @@
 <script lang="ts">
 import { onDestroy } from 'svelte';
 import { levels, getLevelById, getNextLevel } from '$lib/levels.js';
-import type { Level, LevelQuestion } from '$lib/types.js';
-import { viewMode, currentLevelId, unlockedLevels, levelAnswers, resetGeometry, polygons, meshSpacing, material, thickness } from '$lib/stores.js';
+import type { Level, LevelQuestion, LevelScore } from '$lib/types.js';
+import { viewMode, currentLevelId, unlockedLevels, levelAnswers, resetGeometry, polygons, meshSpacing, material, thickness, levelScores, levelAttempts, levelStartTime } from '$lib/stores.js';
 import { createRectTemplate, createLShape, createIShape, createHoleCircle } from '$lib/canvasUtils.js';
 
 export let onClose: () => void;
@@ -12,11 +12,14 @@ let userAnswers = {};
 let result = null;
 let showCheckMsg = '';
 
-let st_unlocked, st_answers;
+let st_unlocked, st_answers, st_scores, st_attempts, st_startTimes;
 const unsubsLv = [];
 function initLv() {
   unsubsLv.push(unlockedLevels.subscribe(v => st_unlocked = v));
   unsubsLv.push(levelAnswers.subscribe(v => st_answers = v));
+  unsubsLv.push(levelScores.subscribe(v => st_scores = Array.isArray(v) ? v : []));
+  unsubsLv.push(levelAttempts.subscribe(v => st_attempts = v || {}));
+  unsubsLv.push(levelStartTime.subscribe(v => st_startTimes = v || {}));
 }
 initLv();
 
@@ -55,6 +58,11 @@ function startLevel() {
   currentLevelId.set(selectedLevelId);
   viewMode.set('level');
   applyLevelData(lv);
+  const newStartTimes = { ...(st_startTimes || {}) };
+  if (!newStartTimes[selectedLevelId]) {
+    newStartTimes[selectedLevelId] = Date.now();
+    levelStartTime.set(newStartTimes);
+  }
   if (onClose) onClose();
 }
 
@@ -101,14 +109,19 @@ function applyLevelData(lv) {
 function checkManualAnswers() {
   const lv = getLevelById(selectedLevelId);
   if (!lv || !lv.data || !lv.data.questions) return;
+  const newAttempts = { ...(st_attempts || {}) };
+  newAttempts[selectedLevelId] = (newAttempts[selectedLevelId] || 0) + 1;
+  levelAttempts.set(newAttempts);
   let allCorrect = true;
   const details = [];
+  let correctCount = 0;
   for (const q of lv.data.questions) {
     const ua = parseFloat(userAnswers[q.field]);
     const diff = Math.abs(ua - q.answer);
     const rel = q.relative ? diff / Math.abs(q.answer) : diff;
     const tol = q.tolerance || 0.01;
     const ok = !isNaN(ua) && rel <= tol;
+    if (ok) correctCount++;
     if (!ok) allCorrect = false;
     details.push({ q, ok, actual: ua, diff: rel });
   }
@@ -120,9 +133,33 @@ function checkManualAnswers() {
       ns.add(nl.id);
       unlockedLevels.set(ns);
     }
+    const now = Date.now();
     const na = { ...(st_answers || {}) };
-    na[selectedLevelId] = { passed: true, time: Date.now() };
+    na[selectedLevelId] = { passed: true, time: now };
     levelAnswers.set(na);
+    const startTime = st_startTimes && st_startTimes[selectedLevelId] ? st_startTimes[selectedLevelId] : now;
+    const timeTaken = now - startTime;
+    const accuracy = lv.data.questions ? correctCount / lv.data.questions.length : 1;
+    const score: LevelScore = {
+      levelId: selectedLevelId,
+      levelName: lv.name,
+      category: lv.category,
+      completed: true,
+      completionTime: now,
+      timeTaken,
+      attempts: newAttempts[selectedLevelId],
+      correctAnswers: correctCount,
+      totalQuestions: lv.data.questions?.length || 0,
+      accuracy
+    };
+    const existingScores = Array.isArray(st_scores) ? st_scores : [];
+    const scoreIdx = existingScores.findIndex(s => s.levelId === selectedLevelId);
+    if (scoreIdx >= 0) {
+      existingScores[scoreIdx] = score;
+    } else {
+      existingScores.push(score);
+    }
+    levelScores.set(existingScores);
     result = { passed: true, details };
   } else {
     showCheckMsg = '❌ 存在错误，请检查标红的题目';

@@ -15,6 +15,10 @@ export interface Stress {
   sy: number;
   sxy: number;
   vm: number;
+  s1?: number;
+  s2?: number;
+  theta1?: number;
+  theta2?: number;
 }
 
 export interface Strain {
@@ -254,6 +258,7 @@ export interface LevelData {
   analyticSolution?: Record<string, string>;
   hint?: string;
   requiredMetrics?: { minQuality?: number; convergence?: boolean };
+  tolerance?: number;
 }
 
 export interface Level {
@@ -284,4 +289,25 @@ export interface PolygonState {
   points: Point2D[];
   isHole: boolean;
   id: string;
+}
+
+export interface Measurement {
+  id: number;
+  p1: Point2D;
+  p2: Point2D;
+  distance: number;
+  timestamp: number;
+}
+
+export interface LevelScore {
+  levelId: number;
+  levelName: string;
+  category: string;
+  completed: boolean;
+  completionTime: number;
+  timeTaken: number;
+  attempts: number;
+  correctAnswers: number;
+  totalQuestions: number;
+  accuracy: number;
 }

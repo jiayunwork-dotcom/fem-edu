@@ -6,7 +6,8 @@ import {
   drawingMode as dmStore, holeMode as hmStore, polygons as pStore,
   currentPolygonPoints as cppStore, doUndo, doRedo, resetGeometry,
   meshSpacing as msStore, clearMesh, hasGeometry as hgStore,
-  hasMesh as hmStore2, hasResults as hrStore
+  hasMesh as hmStore2, hasResults as hrStore, refineMode as rfModeStore,
+  measurementFirstPoint as measFirstStore
 } from '$lib/stores.js';
 import { createRectTemplate, createLShape, createIShape, createHoleCircle } from '$lib/canvasUtils.js';
 
@@ -14,6 +15,7 @@ const dispatch = createEventDispatcher();
 
 let curUnsubs = [];
 let st_p = [], st_dm = 'select', st_hm = false, st_hg = false, st_hm2 = false, st_hr = false, st_ms = 30;
+let st_rfMode = false, st_measFirst = null;
 
 function init() {
   curUnsubs = [
@@ -23,7 +25,9 @@ function init() {
     hgStore.subscribe(v => st_hg = !!v),
     hmStore2.subscribe(v => st_hm2 = !!v),
     hrStore.subscribe(v => st_hr = !!v),
-    msStore.subscribe(v => st_ms = Number(v) || 30)
+    msStore.subscribe(v => st_ms = Number(v) || 30),
+    rfModeStore.subscribe(v => st_rfMode = !!v),
+    measFirstStore.subscribe(v => st_measFirst = v)
   ];
 }
 init();
@@ -95,6 +99,22 @@ function addPlate() {
 function setMode(m) {
   dmStore.set(m);
   if (m !== 'draw') cppStore.set([]);
+  if (m !== 'measure') {
+    measFirstStore.set(null);
+  }
+  if (m !== 'refine') {
+    rfModeStore.set(false);
+  }
+}
+
+function toggleRefineMode() {
+  if (st_rfMode) {
+    rfModeStore.set(false);
+  } else {
+    dmStore.set('select');
+    measFirstStore.set(null);
+    rfModeStore.set(true);
+  }
 }
 
 function toggleTpl() {
@@ -115,13 +135,14 @@ function toggleMesh() {
   <div class="group">
     <button class={st_dm === 'select' ? 'active' : ''} on:click={() => setMode('select')}>🖱 选择</button>
     <button class={st_dm === 'draw' ? 'active' : ''} on:click={() => setMode('draw')}>✏️ 绘制</button>
-    <button class={st_dm === 'edge' ? 'active' : ''} on:click={() => setMode('edge')} title="选择边施加均布载荷">📏 选边</button>
+    <button class={st_dm === 'edge' ? 'active' : ''} on:click={() => setMode('edge')} title="选择边施加均布载荷">📐 选边</button>
     <label class="chk">
       <input type="checkbox" checked={st_hm} on:change={(e) => hmStore.set(e.target.checked)} />
       挖孔
     </label>
     <button class={st_dm === 'constraint' ? 'active' : ''} on:click={() => setMode('constraint')}>🔒 约束</button>
     <button class={st_dm === 'load' ? 'active' : ''} on:click={() => setMode('load')}>⬇ 载荷</button>
+    <button class={st_dm === 'measure' ? 'active' : ''} on:click={() => setMode('measure')} title="测量两点距离">📏 测量</button>
   </div>
   <div class="group">
     <button on:click={doUndo} title="撤销">↶ 撤销</button>
@@ -172,6 +193,7 @@ function toggleMesh() {
       {/if}
     </div>
     <button on:click={() => dispatch('generateMesh')} disabled={!st_hg} title="生成Delaunay三角网格">🔲 生成网格</button>
+    <button class={st_rfMode ? 'active' : ''} on:click={toggleRefineMode} disabled={!st_hm2} title="框选区域进行局部网格加密">🔍 局部加密</button>
     <button on:click={() => dispatch('runFEM')} disabled={!st_hm2} title="执行有限元求解">🧮 求解</button>
     <button on:click={() => clearMesh()} disabled={!st_hm2}>清除网格</button>
   </div>

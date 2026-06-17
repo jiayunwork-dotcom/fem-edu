@@ -10,7 +10,8 @@ import {
   postProcessMode as ppmStore, deformationScale as dsStore,
   stressType as stStore, contourLevels as clStore,
   selectedElement as selElemStore, convergenceData as cdStore,
-  drawingMode as dmStore
+  drawingMode as dmStore, showPrincipalStress as spsStore,
+  principalStressScale as pssStore, measurements as measStore
 } from '$lib/stores.js';
 import { computeElementStiffness } from '$lib/fem.js';
 import { formatNumber } from '$lib/matrix.js';
@@ -21,6 +22,7 @@ let unsubs = [];
 let st_material, st_ps = true, st_ps_str = 'stress', st_t = 0.01, st_stats;
 let st_nodes, st_elements, st_femRes, st_postMode, st_defScale;
 let st_stress, st_contour, st_selEl, st_bf, st_eloads, st_selNodes, st_conv, st_selEdges, st_dm;
+let st_showPS, st_psScale, st_measurements;
 
 function init() {
   unsubs = [
@@ -41,7 +43,10 @@ function init() {
     snStore.subscribe(v => st_selNodes = v),
     cdStore.subscribe(v => st_conv = Array.isArray(v) ? v : []),
     seStore.subscribe(v => st_selEdges = Array.isArray(v) ? v : []),
-    dmStore.subscribe(v => st_dm = v || 'select')
+    dmStore.subscribe(v => st_dm = v || 'select'),
+    spsStore.subscribe(v => st_showPS = !!v),
+    pssStore.subscribe(v => st_psScale = Number(v) || 50),
+    measStore.subscribe(v => st_measurements = Array.isArray(v) ? v : [])
   ];
 }
 init();
@@ -201,7 +206,7 @@ $: buildConvChart();
 
 <div class="sidebar">
   <div class="tabs">
-    {#each [['material', '材料'], ['bcs', '边界'], ['mesh', '网格'], ['post', '后处理'], ['element', '单元'], ['converge', '收敛']] as [k, n]}
+    {#each [['material', '材料'], ['bcs', '边界'], ['mesh', '网格'], ['post', '后处理'], ['element', '单元'], ['converge', '收敛'], ['measure', '测量']] as [k, n]}
       <button class={activeTab === k ? 'active' : ''} on:click={() => activeTab = k}>{n}</button>
     {/each}
   </div>
@@ -325,6 +330,26 @@ $: buildConvChart();
       {#if st_postMode === 'contour'}
         <div class="row"><label>等值线数</label><input type="number" min="3" max="30" bind:value={st_contour} on:change={() => clStore.set(st_contour)} /></div>
       {/if}
+      <h3 style="margin-top:16px;">主应力方向</h3>
+      <div class="row">
+        <label>显示方向</label>
+        <label class="chk">
+          <input type="checkbox" checked={st_showPS} on:change={(e) => spsStore.set(e.target.checked)} />
+          启用
+        </label>
+      </div>
+      {#if st_showPS}
+        <div class="row">
+          <label>缩放系数</label>
+          <input type="range" min="1" max="200" bind:value={st_psScale} on:input={() => pssStore.set(st_psScale)} />
+          <span class="num">{st_psScale}x</span>
+        </div>
+        <div class="hint small">
+          🔴 红色线段：第一主应力（拉应力）<br/>
+          🔵 蓝色线段：第二主应力（压应力）<br/>
+          线段长度按主应力大小缩放
+        </div>
+      {/if}
       {#if st_femRes}
         <h3 style="margin-top:16px;">计算结果</h3>
         <div class="stat-row"><span>最大位移</span><b>{maxDisplacement().toExponential(3)} m</b></div>
@@ -439,6 +464,39 @@ $: buildConvChart();
       {:else}
         <div class="empty">暂无数据<br/><span class="tiny">至少进行两次不同密度的求解</span></div>
       {/if}
+
+    {:else if activeTab === 'measure'}
+      <h3>测量模式</h3>
+      <div class="hint">
+        <b>使用方法：</b><br/>
+        1. 在工具栏点击「📏 测量」按钮进入测量模式<br/>
+        2. 在画布上点击两点测量距离<br/>
+        3. 测量结果自动记录在下方
+      </div>
+      <div class="btn-row">
+        <button class="sm" on:click={() => measStore.set([])} disabled={!st_measurements || !st_measurements.length}>🗑 清空记录</button>
+      </div>
+
+      {#if st_measurements && st_measurements.length > 0}
+        <h4 style="margin:14px 0 6px;font-size:12px;color:#34495e">测量历史 ({st_measurements.length})</h4>
+        <div class="measurement-list">
+          {#each [...st_measurements].reverse() as m, i}
+            <div class="measurement-item">
+              <div class="measurement-header">
+                <span class="measurement-id">#{st_measurements.length - i}</span>
+                <span class="measurement-distance">{m.distance.toFixed(3)}</span>
+              </div>
+              <div class="measurement-coords">
+                P1: ({m.p1.x.toFixed(2)}, {m.p1.y.toFixed(2)})<br/>
+                P2: ({m.p2.x.toFixed(2)}, {m.p2.y.toFixed(2)})
+              </div>
+              <div class="measurement-time">{new Date(m.timestamp).toLocaleTimeString()}</div>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="empty">暂无测量记录<br/><span class="tiny">进入测量模式后点击画布测量</span></div>
+      {/if}
     {/if}
   </div>
 </div>
@@ -484,4 +542,12 @@ table { width: 100%; border-collapse: collapse; }
 table th, table td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; font-size: 11.5px; color: #2c3e50; }
 table th { background: #f4f7fa; color: #555; font-weight: 600; text-align: center; }
 .chart { background: #fff; border: 1px solid #e1e8ed; border-radius: 6px; padding: 6px; margin-top: 8px; }
+.measurement-list { max-height: 350px; overflow-y: auto; padding-right: 4px; }
+.measurement-item { background: #f8fafc; border: 1px solid #e1e8ed; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
+.measurement-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.measurement-id { font-size: 11px; color: #3498db; font-weight: 600; }
+.measurement-distance { font-size: 16px; font-weight: 700; color: #2c3e50; font-family: monospace; }
+.measurement-coords { font-size: 11px; color: #6b7c93; font-family: monospace; line-height: 1.6; }
+.measurement-time { font-size: 10px; color: #95a5a6; margin-top: 6px; text-align: right; }
+.chk { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #555; cursor: pointer; }
 </style>

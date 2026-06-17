@@ -5,13 +5,13 @@ import { zeros, zerosVec, matMul, matTranspose, matScalar, solveLinearSystem, ty
 export interface MeshAnimStep {
   type: string;
   triangles?: Array<Record<string, unknown>>;
-  points?: Point2D[];
+  points?: Array<Point2D & { id?: number }>;
   badTriangles?: Array<Record<string, unknown>>;
   newTriangles?: Array<Record<string, unknown>>;
   allTriangles?: Array<Record<string, unknown>>;
-  nodes?: Point2D[];
+  nodes?: Array<Point2D & { id?: number }>;
   desc?: string;
-  point?: Point2D;
+  point?: Point2D & { id?: number };
 }
 
 export interface BowyerWatsonResult {
@@ -371,6 +371,17 @@ export function solveFEM(nodes: Node[], elements: TriangleElement[], material: M
   return { U, K, F, elementKeList, constraints };
 }
 
+export function computePrincipalStresses(sx: number, sy: number, sxy: number): { s1: number; s2: number; theta1: number; theta2: number } {
+  const avg = (sx + sy) / 2;
+  const diff = (sx - sy) / 2;
+  const r = Math.sqrt(diff * diff + sxy * sxy);
+  const s1 = avg + r;
+  const s2 = avg - r;
+  const theta1 = Math.atan2(sxy, diff) / 2;
+  const theta2 = theta1 + Math.PI / 2;
+  return { s1, s2, theta1, theta2 };
+}
+
 export function computeStresses(nodes: Node[], elements: TriangleElement[], material: MaterialData, planeStress: boolean = true): void {
   for (const el of elements) {
     const { B, D } = computeElementStiffness(el, material, planeStress);
@@ -390,7 +401,15 @@ export function computeStresses(nodes: Node[], elements: TriangleElement[], mate
     }
     el.strain = { ex: strain[0], ey: strain[1], gxy: strain[2] };
     const sx = stress[0], sy = stress[1], sxy = stress[2];
-    el.stress = { sx, sy, sxy, vm: Math.sqrt(sx * sx - sx * sy + sy * sy + 3 * sxy * sxy) };
+    const principal = computePrincipalStresses(sx, sy, sxy);
+    el.stress = {
+      sx, sy, sxy,
+      vm: Math.sqrt(sx * sx - sx * sy + sy * sy + 3 * sxy * sxy),
+      s1: principal.s1,
+      s2: principal.s2,
+      theta1: principal.theta1,
+      theta2: principal.theta2
+    };
   }
 }
 
@@ -416,4 +435,118 @@ export function getMeshStats(elements: TriangleElement[]): MeshStats | null {
     minAngle,
     maxAngle
   } as unknown as MeshStats;
+}
+
+export interface RefineResult {
+  nodes: Node[];
+  elements: TriangleElement[];
+}
+
+function getOrCreateMidNode(n1: Node, n2: Node, nodeMap: Map<string, Node>, nextId: { value: number }): Node {
+  const key = `${Math.min(n1.id, n2.id)}-${Math.max(n1.id, n2.id)}`;
+  let midNode = nodeMap.get(key);
+  if (!midNode) {
+    midNode = new Node(
+      nextId.value++,
+      (n1.x + n2.x) / 2,
+      (n1.y + n2.y) / 2
+    );
+    nodeMap.set(key, midNode);
+  }
+  return midNode;
+}
+
+export function refineElementsInRegion(
+  nodes: Node[],
+  elements: TriangleElement[],
+  x1: number, y1: number, x2: number, y2: number,
+  thickness: number = 0.01
+): RefineResult {
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2);
+  const maxY = Math.max(y1, y2);
+
+  const toRefine: TriangleElement[] = [];
+  const toKeep: TriangleElement[] = [];
+
+  for (const el of elements) {
+    const c = el.centroid;
+    if (c.x >= minX && c.x <= maxX && c.y >= minY && c.y <= maxY) {
+      toRefine.push(el);
+    } else {
+      toKeep.push(el);
+    }
+  }
+
+  if (toRefine.length === 0) {
+    return { nodes: [...nodes], elements: [...elements] };
+  }
+
+  const existingNodeMap: Map<number, Node> = new Map();
+  for (const n of nodes) {
+    existingNodeMap.set(n.id, new Node(n.id, n.x, n.y));
+  }
+
+  let maxId = Math.max(...nodes.map(n => n.id), -1);
+  const nextId = { value: maxId + 1 };
+  const midNodeMap: Map<string, Node> = new Map();
+
+  const newElements: TriangleElement[] = [];
+
+  for (const el of toKeep) {
+    const [n1, n2, n3] = el.nodes.map(n => existingNodeMap.get(n.id)!);
+    const newEl = new TriangleElement(el.id, n1, n2, n3, el.t);
+    newEl.stress = { ...el.stress };
+    newEl.strain = { ...el.strain };
+    newEl.quality = el.quality;
+    newEl.minAngle = el.minAngle;
+    newEl.maxAngle = el.maxAngle;
+    newElements.push(newEl);
+  }
+
+  let elementIdCounter = toKeep.length;
+
+  for (const el of toRefine) {
+    const [A, B, C] = el.nodes.map(n => existingNodeMap.get(n.id)!);
+
+    const midAB = getOrCreateMidNode(A, B, midNodeMap, nextId);
+    const midBC = getOrCreateMidNode(B, C, midNodeMap, nextId);
+    const midCA = getOrCreateMidNode(C, A, midNodeMap, nextId);
+
+    if (!existingNodeMap.has(midAB.id)) existingNodeMap.set(midAB.id, midAB);
+    if (!existingNodeMap.has(midBC.id)) existingNodeMap.set(midBC.id, midBC);
+    if (!existingNodeMap.has(midCA.id)) existingNodeMap.set(midCA.id, midCA);
+
+    const t1 = new TriangleElement(elementIdCounter++, A, midAB, midCA, thickness);
+    const t2 = new TriangleElement(elementIdCounter++, B, midBC, midAB, thickness);
+    const t3 = new TriangleElement(elementIdCounter++, C, midCA, midBC, thickness);
+    const t4 = new TriangleElement(elementIdCounter++, midAB, midBC, midCA, thickness);
+
+    t1.computeAngles();
+    t2.computeAngles();
+    t3.computeAngles();
+    t4.computeAngles();
+
+    newElements.push(t1, t2, t3, t4);
+  }
+
+  const finalNodes: Node[] = Array.from(existingNodeMap.values());
+  finalNodes.sort((a, b) => a.id - b.id);
+
+  for (let i = 0; i < finalNodes.length; i++) {
+    finalNodes[i].id = i;
+  }
+
+  const idMapping: Map<number, number> = new Map();
+  finalNodes.forEach((n, i) => idMapping.set(existingNodeMap.get(n.id)?.id ?? n.id, i));
+
+  for (const el of newElements) {
+    el.nodes = el.nodes.map(n => {
+      const newId = idMapping.get(n.id);
+      return finalNodes[newId ?? n.id] ?? n;
+    }) as [Node, Node, Node];
+  }
+
+  return { nodes: finalNodes, elements: newElements };
 }
